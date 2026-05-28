@@ -72,9 +72,13 @@ class GeloGrowthOS {
 
     // Modal close
     document.getElementById('modal-close')?.addEventListener('click', () => this.closeModal('add-modal'));
-    document.getElementById('add-modal-overlay')?.addEventListener('click', () => this.closeModal('add-modal'));
+    document.getElementById('add-modal-overlay')?.addEventListener('click', (e) => {
+      if (e.target.id === 'add-modal-overlay') this.closeModal('add-modal');
+    });
     document.getElementById('msg-modal-close')?.addEventListener('click', () => this.closeModal('msg-modal'));
-    document.getElementById('msg-modal-overlay')?.addEventListener('click', () => this.closeModal('msg-modal'));
+    document.getElementById('msg-modal-overlay')?.addEventListener('click', (e) => {
+      if (e.target.id === 'msg-modal-overlay') this.closeModal('msg-modal');
+    });
 
     // Add form submit
     document.getElementById('add-form')?.addEventListener('submit', (e) => {
