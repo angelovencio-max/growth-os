@@ -1654,69 +1654,197 @@ class GeloGrowthOS {
 
     const today = getDemoToday();
     let newRecord;
+    let newContact;
+    let newOrg;
 
     switch (this.currentView) {
-      case 'linkedin':
+      case 'linkedin': {
+        const contactId = `CON-${String((this.data.contacts || []).length + 1).padStart(4, '0')}`;
+        const orgId = data.company ? `ORG-${String((this.data.organizations || []).length + 1).padStart(4, '0')}` : '';
+
+        newContact = {
+          contactId,
+          fullName: data.contactName,
+          email: '',
+          mobile: '',
+          linkedinUrl: data.linkedinUrl || '',
+          organizationId: orgId,
+          segments: ['LinkedIn Lead'],
+          preferredChannel: 'LinkedIn',
+          contactBasis: '',
+          ownerId: 'Gelo',
+          status: 'Active',
+          createdAt: today,
+          updatedAt: today,
+          notes: data.notes || '',
+        };
+        this.data.contacts.push(newContact);
+
+        if (data.company) {
+          newOrg = {
+            organizationId: orgId,
+            organizationName: data.company,
+            industry: '',
+            website: '',
+            source: 'LinkedIn',
+            accountStatus: 'Active',
+            ownerId: 'Gelo',
+            createdAt: today,
+            updatedAt: today,
+            notes: '',
+          };
+          this.data.organizations.push(newOrg);
+        }
+
         newRecord = {
-          leadId: `LL-${String(this.data.linkedinLeads.length + 1).padStart(4, '0')}`,
-          contactId: `CON-${String(this.data.contacts.length + 1).padStart(4, '0')}`,
-          ...data,
+          leadId: `LL-${String((this.data.linkedinLeads || []).length + 1).padStart(4, '0')}`,
+          contactId: contactId,
+          linkedinUrl: data.linkedinUrl || '',
+          source: data.source || 'LinkedIn Search',
           dateCaptured: today,
           connectionStatus: 'Pending',
+          role: data.role || '',
+          organizationId: orgId,
+          interestSignal: data.interestSignal || '',
           qualificationScore: this.calculateLeadScore(data),
+          priority: data.priority || 'Normal',
           stage: 'New',
           lastInteractionAt: '',
+          nextAction: data.nextAction || '',
+          nextActionDate: data.nextActionDate || '',
           convertedOpportunityId: '',
+          ownerId: 'Gelo',
+          notes: data.notes || '',
         };
         this.data.linkedinLeads.push(newRecord);
         break;
-      case 'prime':
+      }
+      case 'prime': {
+        const primeContactId = `CON-${String((this.data.contacts || []).length + 1).padStart(4, '0')}`;
+        const primeOrgId = `ORG-${String((this.data.organizations || []).length + 1).padStart(4, '0')}`;
+
+        newContact = {
+          contactId: primeContactId,
+          fullName: data.contactName,
+          email: '',
+          mobile: '',
+          linkedinUrl: '',
+          organizationId: primeOrgId,
+          segments: ['Prime'],
+          preferredChannel: 'Email',
+          contactBasis: '',
+          ownerId: 'Gelo',
+          status: 'Active',
+          createdAt: today,
+          updatedAt: today,
+          notes: '',
+        };
+        this.data.contacts.push(newContact);
+
+        newOrg = {
+          organizationId: primeOrgId,
+          organizationName: data.orgName,
+          industry: '',
+          website: '',
+          source: 'Direct',
+          accountStatus: 'Prospect',
+          ownerId: 'Gelo',
+          createdAt: today,
+          updatedAt: today,
+          notes: '',
+        };
+        this.data.organizations.push(newOrg);
+
         const value = parseInt(data.estimatedValue) || 0;
         const prob = parseInt(data.probabilityPercent) || 20;
         newRecord = {
-          opportunityId: `PO-${String(this.data.primePipeline.length + 1).padStart(4, '0')}`,
-          ...data,
+          opportunityId: `PO-${String((this.data.primePipeline || []).length + 1).padStart(4, '0')}`,
+          contactId: primeContactId,
+          organizationId: primeOrgId,
+          sourceLeadId: '',
+          serviceInterest: data.serviceInterest,
+          problemStatement: data.problemStatement || '',
           stage: 'New Inquiry',
           estimatedValue: value,
           probabilityPercent: prob,
           weightedValue: Math.round(value * prob / 100),
+          budgetRange: '',
+          decisionMaker: data.contactName,
+          timeline: '',
           discoveryDate: '',
           proposalDate: '',
+          nextAction: data.nextAction || '',
+          nextActionDate: data.nextActionDate || '',
           closeDate: '',
           outcomeReason: '',
+          ownerId: 'Gelo',
         };
         this.data.primePipeline.push(newRecord);
         break;
-      case 'scc':
+      }
+      case 'scc': {
         newRecord = {
-          contentId: `SCC-${String(this.data.sccContent.length + 1).padStart(4, '0')}`,
+          contentId: `SCC-${String((this.data.sccContent || []).length + 1).padStart(4, '0')}`,
           ...data,
           status: 'Idea',
           views: 0, comments: 0, saves: 0, replies: 0,
-          repurposeFlag: false,
+          repurposeFlag: 'FALSE',
+          sourceId: '',
+          ownerId: 'Gelo',
           publishedAt: '', publishedUrl: '', draftUrl: '', assetUrl: '',
         };
         this.data.sccContent.push(newRecord);
         break;
-      case 'calmera':
+      }
+      case 'calmera': {
+        const calmeraContactId = `CON-${String((this.data.contacts || []).length + 1).padStart(4, '0')}`;
+        newContact = {
+          contactId: calmeraContactId,
+          fullName: data.customerName,
+          email: '',
+          mobile: '',
+          linkedinUrl: '',
+          organizationId: '',
+          segments: ['Calmera'],
+          preferredChannel: data.preferredChannel || 'Email',
+          contactBasis: '',
+          ownerId: 'Gelo',
+          status: 'Active',
+          createdAt: today,
+          updatedAt: today,
+          notes: '',
+        };
+        this.data.contacts.push(newContact);
+
         newRecord = {
-          orderId: `CAL-${String(this.data.calmeraOrders.length + 1).padStart(4, '0')}`,
-          ...data,
-          orderAmount: parseInt(data.orderAmount) || 0,
+          orderId: `CAL-${String((this.data.calmeraOrders || []).length + 1).padStart(4, '0')}`,
+          externalOrderRef: data.externalOrderRef || '',
+          contactId: calmeraContactId,
+          customerName: data.customerName,
           orderDate: today,
+          itemsSummary: data.itemsSummary,
+          orderAmount: parseInt(data.orderAmount) || 0,
+          fulfillmentCutoff: data.fulfillmentCutoff,
+          preferredChannel: data.preferredChannel || 'Email',
           reconfirmationStatus: 'Pending Contact',
           latestAttemptAt: '',
           responseDueAt: '',
           orderStatus: 'New',
           changeNotes: '',
           resolvedAt: '',
+          ownerId: 'Gelo',
         };
         this.data.calmeraOrders.push(newRecord);
         break;
+      }
     }
 
     this.closeModal('add-modal');
     form.reset();
+
+    // Map relational display names locally (so that names show in lists instantly!)
+    sheetsService._denormalize(this.data);
+
     this.applyFilters();
     this.renderContent();
     this.showToast('Record added successfully!', 'success');
@@ -1731,7 +1859,15 @@ class GeloGrowthOS {
       };
       const tabKey = tabMap[this.currentView];
       if (tabKey) {
-        sheetsService.appendRecord(tabKey, newRecord)
+        // Sequentially write Contact -> Organization -> Main Record to keep Sheets relational database clean
+        const promises = [];
+        if (newContact) promises.push(sheetsService.appendRecord('contacts', newContact));
+        if (newOrg) promises.push(sheetsService.appendRecord('organizations', newOrg));
+
+        Promise.all(promises)
+          .then(() => {
+            return sheetsService.appendRecord(tabKey, newRecord);
+          })
           .then((res) => {
             if (res && res.rowsAfter !== undefined) {
               newRecord._rowIndex = res.rowsAfter - 1;
@@ -1740,7 +1876,7 @@ class GeloGrowthOS {
           })
           .catch(err => {
             console.error('Sheet write failed:', err);
-            this.showToast('⚠️ Saved locally, but Sheet write failed. Try refreshing.', 'warning');
+            this.showToast('⚠️ Saved locally, but Sheet write failed.', 'warning');
           });
       }
     }
