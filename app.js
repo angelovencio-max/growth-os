@@ -4455,6 +4455,23 @@ class GeloGrowthOS {
               this.syncError = err.message || err;
             }
           }
+        } else {
+          // If no opportunity exists, but sheets are connected, we must still update the lead record in Google Sheets!
+          if (this.sheetsConnected && lead._rowIndex !== undefined) {
+            try {
+              await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+              this.showToast('📤 Lead Saved to Google Sheets', 'success');
+              this.syncStatus = 'Synced';
+              this.syncError = null;
+              this.lastSynced = new Date().toLocaleString();
+              localStorage.setItem('gos_last_synced', this.lastSynced);
+            } catch(err) {
+              console.error('Failed to sync lead in basic stage:', err);
+              this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
+              this.syncStatus = 'Error';
+              this.syncError = err.message || err;
+            }
+          }
         }
       }
     } else if (sourceType === 'prime') {
@@ -4462,46 +4479,64 @@ class GeloGrowthOS {
       if (!opp) return;
       
       const leadId = opp.sourceLeadId || opp.leadId;
-      if (!leadId) return;
-      
-      const lead = this.data.linkedinLeads.find(l => l.leadId === leadId);
-      if (lead) {
-        // Sync fields from opp to lead
-        lead.contactName = opp.contactName || '';
-        lead.company = opp.orgName || '';
-        lead.mobile = opp.mobile || '';
-        lead.email = opp.email || '';
-        lead.source = opp.source || '';
-        lead.linkedinUrl = opp.profileUrl || '';
-        
-        lead.stage = opp.stage;
-        lead.projectedCloseAmount = parseFloat(opp.estimatedValue) || 0;
-        lead.paymentStatus = opp.paymentStatus || 'Unpaid';
-        
-        lead.nextAction = opp.nextAction || '';
-        lead.nextActionDate = opp.nextActionDate || '';
-        
-        lead.convertedToPipeline = 'Yes';
-        lead.pipelineOpportunityId = opp.opportunityId;
-        lead.convertedOpportunityId = opp.opportunityId;
-        lead.pipelineStage = opp.stage;
-        lead.dealStatus = opp.dealStatus;
-        
-        if (this.sheetsConnected) {
-          try {
-            await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
-            await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
-            this.showToast('📤 Lead & Pipeline Synced to Google Sheets', 'success');
-            this.syncStatus = 'Synced';
-            this.syncError = null;
-            this.lastSynced = new Date().toLocaleString();
-            localStorage.setItem('gos_last_synced', this.lastSynced);
-          } catch (err) {
-            console.error('Failed to sync lead in syncLeadAndOpportunity:', err);
-            this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
-            this.syncStatus = 'Error';
-            this.syncError = err.message || err;
+      if (leadId) {
+        const lead = this.data.linkedinLeads.find(l => l.leadId === leadId);
+        if (lead) {
+          // Sync fields from opp to lead
+          lead.contactName = opp.contactName || '';
+          lead.company = opp.orgName || '';
+          lead.mobile = opp.mobile || '';
+          lead.email = opp.email || '';
+          lead.source = opp.source || '';
+          lead.linkedinUrl = opp.profileUrl || '';
+          
+          lead.stage = opp.stage;
+          lead.projectedCloseAmount = parseFloat(opp.estimatedValue) || 0;
+          lead.paymentStatus = opp.paymentStatus || 'Unpaid';
+          
+          lead.nextAction = opp.nextAction || '';
+          lead.nextActionDate = opp.nextActionDate || '';
+          
+          lead.convertedToPipeline = 'Yes';
+          lead.pipelineOpportunityId = opp.opportunityId;
+          lead.convertedOpportunityId = opp.opportunityId;
+          lead.pipelineStage = opp.stage;
+          lead.dealStatus = opp.dealStatus;
+          
+          if (this.sheetsConnected) {
+            try {
+              await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+              await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
+              this.showToast('📤 Lead & Pipeline Synced to Google Sheets', 'success');
+              this.syncStatus = 'Synced';
+              this.syncError = null;
+              this.lastSynced = new Date().toLocaleString();
+              localStorage.setItem('gos_last_synced', this.lastSynced);
+            } catch (err) {
+              console.error('Failed to sync lead in syncLeadAndOpportunity:', err);
+              this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
+              this.syncStatus = 'Error';
+              this.syncError = err.message || err;
+            }
           }
+          return;
+        }
+      }
+
+      // Fallback: If no connected lead (or lead not found), still save the opportunity itself to Google Sheets
+      if (this.sheetsConnected && opp._rowIndex !== undefined) {
+        try {
+          await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
+          this.showToast('📤 Opportunity Saved to Google Sheets', 'success');
+          this.syncStatus = 'Synced';
+          this.syncError = null;
+          this.lastSynced = new Date().toLocaleString();
+          localStorage.setItem('gos_last_synced', this.lastSynced);
+        } catch (err) {
+          console.error('Failed to sync opportunity in syncLeadAndOpportunity:', err);
+          this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
+          this.syncStatus = 'Error';
+          this.syncError = err.message || err;
         }
       }
     }
