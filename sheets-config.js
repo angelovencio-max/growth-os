@@ -364,6 +364,22 @@ class SheetsService {
     return result;
   }
 
+  // ── Rename Tab in Google Sheets ───────────────────────────
+  async renameTab(oldName, newName) {
+    if (!this.isConfigured()) return;
+
+    const response = await fetch(settingsEngine.getWebAppUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'renameTab', oldName, newName }),
+    });
+
+    const result = await response.json();
+    if (result.error) throw new Error(result.error);
+    return result;
+  }
+
+
   // ── Sign In/Out (simplified — just flags) ─────────────────
   signIn()  { this.isSignedIn = true; }
   signOut() { this.isSignedIn = false; }

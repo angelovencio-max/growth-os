@@ -5192,28 +5192,60 @@ class GeloGrowthOS {
     this.showToast('Profile saved!', 'success');
   }
 
-  _saveModuleSettings() {
+  async _saveModuleSettings() {
     const settings = settingsEngine.get();
     const customizableIds = ['leads', 'brandCommunity', 'productsOrders'];
-    settings.modules.forEach((mod, idx) => {
-      if (!customizableIds.includes(mod.id)) return;
+    const promises = [];
+    
+    for (let idx = 0; idx < settings.modules.length; idx++) {
+      const mod = settings.modules[idx];
+      if (!customizableIds.includes(mod.id)) continue;
+      
       const labelEl = document.getElementById(`mod-label-${idx}`);
       const tabEl   = document.getElementById(`mod-tab-${idx}`);
-      if (labelEl && labelEl.value.trim()) mod.label = labelEl.value.trim();
-      if (tabEl   && tabEl.value.trim()) {
+      
+      if (labelEl && labelEl.value.trim()) {
+        mod.label = labelEl.value.trim();
+      }
+      
+      if (tabEl && tabEl.value.trim()) {
         const newTab = tabEl.value.trim();
-        mod.sheetTab = newTab;
-        if (settings.sheets.tabMappings[mod.id] !== undefined) {
-          settings.sheets.tabMappings[mod.id] = newTab;
+        const oldTab = settings.sheets.tabMappings[mod.id] || mod.sheetTab;
+        
+        if (newTab !== oldTab) {
+          if (this.sheetsConnected && oldTab) {
+            promises.push(
+              sheetsService.renameTab(oldTab, newTab)
+                .then(() => {
+                  this.showToast(`🏷️ Renamed Google Sheets tab "${oldTab}" to "${newTab}"`, 'success');
+                })
+                .catch(err => {
+                  console.error('Failed to rename Google Sheets tab:', err);
+                  this.showToast(`⚠️ Could not rename Google Sheet tab "${oldTab}". Please rename it manually!`, 'warning');
+                })
+            );
+          }
+          mod.sheetTab = newTab;
+          if (settings.sheets.tabMappings[mod.id] !== undefined) {
+            settings.sheets.tabMappings[mod.id] = newTab;
+          }
         }
       }
-    });
+    }
+    
     settingsEngine.save(settings);
     this.buildNavigation();
     this.updateTopbar();
-    this.showToast('Module names saved!', 'success');
+    this.showToast('Module settings saved locally!', 'success');
+    
+    if (promises.length > 0) {
+      this.showToast('🔄 Renaming Google Sheet tabs in background...', 'info');
+      await Promise.all(promises);
+    }
+    
     this.renderContent();
   }
+
 
   _toggleModuleVisible(idx, visible) {
     const settings = settingsEngine.get();
@@ -5270,24 +5302,51 @@ class GeloGrowthOS {
     this.renderContent();
   }
 
-  _saveTabMappings() {
+  async _saveTabMappings() {
     const settings = settingsEngine.get();
     const customizableIds = ['leads', 'brandCommunity', 'productsOrders'];
+    const promises = [];
+    
     Object.keys(settings.sheets.tabMappings).forEach(modId => {
       if (!customizableIds.includes(modId)) return;
       const el = document.getElementById(`tab-${modId}`);
       if (el && el.value.trim()) {
         const newTab = el.value.trim();
-        settings.sheets.tabMappings[modId] = newTab;
-        const mod = settings.modules.find(m => m.id === modId);
-        if (mod) {
-          mod.sheetTab = newTab;
+        const oldTab = settings.sheets.tabMappings[modId];
+        
+        if (newTab !== oldTab) {
+          if (this.sheetsConnected && oldTab) {
+            promises.push(
+              sheetsService.renameTab(oldTab, newTab)
+                .then(() => {
+                  this.showToast(`🏷️ Renamed Google Sheets tab "${oldTab}" to "${newTab}"`, 'success');
+                })
+                .catch(err => {
+                  console.error('Failed to rename Google Sheets tab:', err);
+                  this.showToast(`⚠️ Could not rename Google Sheet tab "${oldTab}". Please rename it manually!`, 'warning');
+                })
+            );
+          }
+          settings.sheets.tabMappings[modId] = newTab;
+          const mod = settings.modules.find(m => m.id === modId);
+          if (mod) {
+            mod.sheetTab = newTab;
+          }
         }
       }
     });
+    
     settingsEngine.save(settings);
-    this.showToast('Tab mappings saved!', 'success');
+    this.showToast('Tab mappings saved locally!', 'success');
+    
+    if (promises.length > 0) {
+      this.showToast('🔄 Renaming Google Sheet tabs in background...', 'info');
+      await Promise.all(promises);
+    }
+    
+    this.renderContent();
   }
+
 
   _resetSettings() {
     this.showConfirm(
