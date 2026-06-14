@@ -103,6 +103,33 @@ const COLUMN_MAP = {
   follow_up_date: 'nextActionDate',
   projected_close_amount: 'projectedCloseAmount',
   score: 'qualificationScore',
+
+  // Projects
+  project_id: 'projectId', project_name: 'projectName', deadline: 'deadline', progress: 'progress', budget: 'budget',
+  
+  // Clients
+  client_id: 'clientId', client_name: 'clientName', services: 'services', end_date: 'endDate', account_value: 'accountValue',
+  
+  // Areas
+  area_id: 'areaId', area_name: 'areaName', type: 'type',
+  
+  // Goals
+  goal_id: 'goalId', goal_name: 'goalName', target_metric: 'targetMetric', current_metric: 'currentMetric',
+  
+  // Habits
+  habit_id: 'habitId', habit_name: 'habitName', frequency: 'frequency', streak: 'streak', history: 'history',
+  
+  // Learning
+  learning_id: 'learningId',
+  
+  // SOPs
+  sop_id: 'sopId', process_title: 'processTitle', steps: 'steps', version: 'version', last_updated: 'lastUpdated',
+
+  // Notes
+  note_id: 'noteId', content: 'content',
+  
+  // Expanded Tasks
+  start_date: 'startDate', area_id: 'areaId', project_id: 'projectId', client_id: 'clientId', content_id: 'contentId', goal_id: 'goalId', estimated_time: 'estimatedTime', actual_time: 'actualTime', is_recurring: 'isRecurring', recurrence_pattern: 'recurrencePattern', subtasks: 'subtasks', attachments: 'attachments', dependencies: 'dependencies', my_day_pinned: 'myDayPinned'
 };
 
 // Reverse map (camelCase → snake_case)
@@ -131,7 +158,7 @@ Object.entries(PRIORITY_REVERSE).forEach(([camel, snake]) => {
 const NUMBER_FIELDS = new Set([
   'qualificationScore', 'estimatedValue', 'probabilityPercent', 'weightedValue',
   'orderAmount', 'views', 'comments', 'saves', 'replies', 'engagements', 'leadsGenerated',
-  'projectedCloseAmount',
+  'projectedCloseAmount', 'estimatedTime', 'actualTime', 'accountValue', 'budget', 'progress', 'targetMetric', 'currentMetric', 'streak'
 ]);
 
 // Dynamic Tab name ↔ JS collection key mapping
@@ -146,6 +173,14 @@ function resolveTabToJsKey(tabName) {
       content:        'repurposeOutputs',
       contacts:       'contacts',
       organizations:  'organizations',
+      tasks:          'tasks',
+      projects:       'projects',
+      clients:        'clients',
+      goals:          'goals',
+      habits:         'habits',
+      learning:       'learning',
+      notes:          'notes',
+      sops:           'sops',
     };
     
     for (const [modId, customTabName] of Object.entries(mappings)) {
@@ -167,6 +202,13 @@ function resolveTabToJsKey(tabName) {
     'Interactions': 'interactions',
     'Tasks': 'tasks',
     'Calendar': 'tasks',
+    'Projects': 'projects',
+    'Clients': 'clients',
+    'Goals': 'goals',
+    'Habits': 'habits',
+    'Learning': 'learning',
+    'Notes': 'notes',
+    'SOPs': 'sops',
   };
   
   return defaultTabKeyMap[tabName] || tabName;
@@ -183,6 +225,14 @@ function resolveJsKeyToTab(jsKey) {
       sccContent: 'brandCommunity',
       calmeraOrders: 'productsOrders',
       repurposeOutputs: 'content',
+      tasks: 'tasks',
+      projects: 'projects',
+      clients: 'clients',
+      goals: 'goals',
+      habits: 'habits',
+      learning: 'learning',
+      notes: 'notes',
+      sops: 'sops',
     };
     
     const modId = jsKeyToModId[jsKey];
@@ -202,6 +252,13 @@ function resolveJsKeyToTab(jsKey) {
     repurposeOutputs: 'Repurpose_Outputs',
     interactions: 'Interactions',
     tasks: 'Tasks',
+    projects: 'Projects',
+    clients: 'Clients',
+    goals: 'Goals',
+    habits: 'Habits',
+    learning: 'Learning',
+    notes: 'Notes',
+    sops: 'SOPs',
   };
   
   return defaultJsToTab[jsKey] || jsKey;

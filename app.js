@@ -6,15 +6,32 @@
 
 // Module ID → internal view type mapping (keeps all existing logic intact)
 const MODULE_TO_VIEW = {
-  today:          'command-center',
-  calendar:       'calendar',
-  leads:          'linkedin',
-  messages:       'messages',
-  salesPipeline:  'prime',
-  brandCommunity: 'scc',
-  productsOrders: 'calmera',
-  content:        'repurposing',
-  settings:       'settings',
+  today:             'command-center',
+  myDay:             'my-day',
+  inbox:             'inbox',
+  tasks:             'tasks',
+  calendar:          'calendar',
+  projects:          'projects',
+  leads:             'linkedin',
+  messages:          'messages',
+  salesPipeline:     'prime',
+  clients:           'clients',
+  brandCommunity:    'scc',
+  productsOrders:    'calmera',
+  content:           'repurposing',
+  operations:        'operations',
+  finance:           'finance',
+  notes:             'notes',
+  sops:              'sops',
+  files:             'files',
+  templates:         'templates',
+  personalDashboard: 'personal-dashboard',
+  goals:             'goals',
+  habits:            'habits',
+  learning:          'learning',
+  reports:           'reports',
+  automations:       'automations',
+  settings:          'settings',
 };
 const VIEW_TO_MODULE = Object.fromEntries(Object.entries(MODULE_TO_VIEW).map(([k,v]) => [v,k]));
 
@@ -113,24 +130,75 @@ class GeloGrowthOS {
     this.applySidebarState();
   }
 
+  toggleNavGroup(catId) {
+    const el = document.getElementById(`nav-group-${catId}`);
+    if (el) {
+      el.classList.toggle('collapsed');
+      const isCollapsed = el.classList.contains('collapsed');
+      localStorage.setItem(`gos_nav_group_${catId}_collapsed`, isCollapsed);
+    }
+  }
+
   // ── Build Navigation from Settings ──────────────────────────
   buildNavigation() {
     const settings = settingsEngine.get();
     const modules  = settingsEngine.getVisibleModules();
 
+    // Group modules by category
+    const categories = {
+      core: { label: 'Core', items: [] },
+      business: { label: 'Business', items: [] },
+      knowledge: { label: 'Knowledge', items: [] },
+      personal: { label: 'Personal', items: [] },
+      system: { label: 'System', items: [] }
+    };
+
+    modules.forEach(mod => {
+      const cat = mod.category || 'core';
+      if (categories[cat]) {
+        categories[cat].items.push(mod);
+      } else {
+        categories['core'].items.push(mod);
+      }
+    });
+
     // Build sidebar nav
     const nav = document.getElementById('sidebar-nav');
     if (nav) {
-      nav.innerHTML = modules.map(mod => `
-        <button class="gos-nav-item ${this.currentModule === mod.id ? 'active' : ''}" 
-                data-module="${mod.id}"
-                onclick="app.navigateTo('${mod.id}')"
-                title="${mod.label}">
-          <span class="nav-item-icon">${getIconSvg(MODULE_ICON_MAP[mod.id] || 'info', 18)}</span>
-          <span class="nav-item-label">${mod.label}</span>
-          ${mod.id === 'today' ? '<span class="nav-item-badge" id="nav-badge-overdue" style="display:none">0</span>' : ''}
-        </button>
-      `).join('');
+      let navHtml = '';
+      Object.entries(categories).forEach(([catId, catObj]) => {
+        if (catObj.items.length === 0) return;
+        
+        const isCollapsed = localStorage.getItem(`gos_nav_group_${catId}_collapsed`) === 'true';
+        navHtml += `
+          <div class="nav-group ${isCollapsed ? 'collapsed' : ''}" id="nav-group-${catId}">
+            <div class="nav-group-header" onclick="app.toggleNavGroup('${catId}')">
+              <span>${catObj.label}</span>
+              <span class="nav-group-chevron">▾</span>
+            </div>
+            <div class="nav-group-items">
+        `;
+        
+        catObj.items.forEach(mod => {
+          navHtml += `
+            <button class="gos-nav-item ${this.currentModule === mod.id ? 'active' : ''}" 
+                    data-module="${mod.id}"
+                    onclick="app.navigateTo('${mod.id}')"
+                    title="${mod.label}">
+              <span class="nav-item-icon">${getIconSvg(MODULE_ICON_MAP[mod.id] || 'info', 18)}</span>
+              <span class="nav-item-label">${mod.label}</span>
+              ${mod.id === 'today' ? '<span class="nav-item-badge" id="nav-badge-overdue" style="display:none">0</span>' : ''}
+              ${mod.id === 'tasks' ? '<span class="nav-item-badge" id="nav-badge-tasks-todo" style="display:none">0</span>' : ''}
+            </button>
+          `;
+        });
+        
+        navHtml += `
+            </div>
+          </div>
+        `;
+      });
+      nav.innerHTML = navHtml;
     }
 
     // Build mobile bottom-nav labels & icons dynamically
@@ -153,7 +221,7 @@ class GeloGrowthOS {
     // Build "More" drawer nav
     const drawer = document.getElementById('drawer-nav');
     if (drawer) {
-      const drawerMods = modules.filter(m => DRAWER_MODULES.includes(m.id));
+      const drawerMods = modules.filter(m => !BOTTOM_NAV_MODULES.includes(m.id));
       drawer.innerHTML = drawerMods.map(mod => `
         <button class="drawer-nav-item ${this.currentModule === mod.id ? 'active' : ''}"
                 data-module="${mod.id}"
@@ -293,8 +361,43 @@ class GeloGrowthOS {
   }
 
   // ── Data Loading ────────────────────────────────────────────
+  saveLocalData() {
+    try {
+      localStorage.setItem('gos_local_database', JSON.stringify(this.data));
+    } catch (e) {
+      console.error('[GeloGrowthOS] saveLocalData failed:', e);
+    }
+  }
+
+  loadLocalDataFallback() {
+    const localRaw = localStorage.getItem('gos_local_database');
+    if (localRaw) {
+      try {
+        const parsed = JSON.parse(localRaw);
+        this.data = { ...DEMO_DATA, ...parsed };
+        this.applyFilters();
+        this.render();
+      } catch (e) {
+        console.warn('[GeloGrowthOS] loadLocalDataFallback failed:', e);
+      }
+    }
+  }
+
   loadData() {
-    // Use demo data (or Sheets data when connected)
+    const isSheets = localStorage.getItem('gos_sheets_connected') === 'true';
+    if (!isSheets) {
+      const localRaw = localStorage.getItem('gos_local_database');
+      if (localRaw) {
+        try {
+          const parsed = JSON.parse(localRaw);
+          this.data = { ...DEMO_DATA, ...parsed };
+          this.applyFilters();
+          return;
+        } catch (e) {
+          console.warn('[GeloGrowthOS] Load local database failed:', e);
+        }
+      }
+    }
     this.data = { ...DEMO_DATA };
     this.applyFilters();
   }
@@ -417,6 +520,9 @@ class GeloGrowthOS {
 
   // ── Main Render ─────────────────────────────────────────────
   render() {
+    if (!this.sheetsConnected) {
+      this.saveLocalData();
+    }
     this.updateTopbar();
     this.renderContent();
   }
@@ -463,16 +569,33 @@ class GeloGrowthOS {
     content.className = 'gos-content animate-fade-in';
 
     switch (this.currentView) {
-      case 'command-center': this.renderToday(content); break;
-      case 'calendar':       this.renderCalendar(content); break;
-      case 'linkedin':       this.renderLinkedIn(content); break;
-      case 'messages':       this.renderMessagesPage(content); break;
-      case 'prime':          this.renderPrime(content); break;
-      case 'scc':            this.renderSCC(content); break;
-      case 'calmera':        this.renderCalmera(content); break;
-      case 'repurposing':    this.renderRepurposing(content); break;
-      case 'settings':       this.renderSettings(content); break;
-      default:               this.renderToday(content);
+      case 'command-center':    this.renderToday(content); break;
+      case 'my-day':            this.renderMyDay(content); break;
+      case 'inbox':             this.renderInbox(content); break;
+      case 'tasks':             this.renderTasks(content); break;
+      case 'calendar':          this.renderCalendar(content); break;
+      case 'projects':          this.renderProjects(content); break;
+      case 'linkedin':          this.renderLinkedIn(content); break;
+      case 'messages':          this.renderMessagesPage(content); break;
+      case 'prime':             this.renderPrime(content); break;
+      case 'clients':           this.renderClients(content); break;
+      case 'scc':               this.renderSCC(content); break;
+      case 'calmera':           this.renderCalmera(content); break;
+      case 'repurposing':       this.renderRepurposing(content); break;
+      case 'operations':        this.renderOperations(content); break;
+      case 'finance':           this.renderFinance(content); break;
+      case 'notes':             this.renderNotes(content); break;
+      case 'sops':              this.renderSops(content); break;
+      case 'files':             this.renderFiles(content); break;
+      case 'templates':         this.renderTemplates(content); break;
+      case 'personal-dashboard': this.renderPersonalDashboard(content); break;
+      case 'goals':             this.renderGoals(content); break;
+      case 'habits':            this.renderHabits(content); break;
+      case 'learning':          this.renderLearning(content); break;
+      case 'reports':           this.renderReports(content); break;
+      case 'automations':       this.renderAutomations(content); break;
+      case 'settings':          this.renderSettings(content); break;
+      default:                  this.renderToday(content);
     }
   }
 
@@ -539,198 +662,163 @@ class GeloGrowthOS {
     const leads = this.data.linkedinLeads || [];
     const pipeline = this.data.primePipeline || [];
     const tasks = this.data.tasks || [];
-    const events = this.gatherCalendarEvents();
-
-    // 1. Calculations
+    const projects = this.data.projects || [];
+    
+    // Calculations
+    const tasksToday = tasks.filter(t => t.dueAt === todayStr);
+    const completedTasksToday = tasksToday.filter(t => t.status === 'Completed').length;
+    
+    const overdueTasks = tasks.filter(t => t.dueAt && t.dueAt < todayStr && t.status !== 'Completed');
     const followUpsToday = leads.filter(l => l.nextActionDate === todayStr && !['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage)).length;
-    
-    // Converted leads are those with stage Qualified, Call Booked, Proposal, Negotiation, Closed Won, Closed Lost or pipeline opportunity
-    const convertedCount = leads.filter(l => ['Qualified', 'Call Booked', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost'].includes(l.stage) || l.convertedToPipeline === 'Yes' || pipeline.some(p => String(p.sourceLeadId) === String(l.leadId))).length;
-    
-    const overdueFollowUps = leads.filter(l => l.nextActionDate && l.nextActionDate < todayStr && !['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage)).length;
-    
-    const activeLeads = leads.filter(l => !['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage));
-    const projectedValue = activeLeads.reduce((s, l) => s + (l.projectedCloseAmount || 0), 0);
+    const activeProjects = projects.filter(p => p.progress !== 100);
 
-    // 2. Today's Actions List (Based on Requirement 6)
-    const todayActionsList = leads.filter(l => {
-      // Unpaid or Partial payment leads need daily operational focus
-      if (['Unpaid', 'Partial'].includes(l.paymentStatus)) {
-        return true;
-      }
-      
-      // If it is closed, don't show it in outreach
-      if (['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage)) {
-        return false;
-      }
-      
-      const isPipelineReady = ['Qualified', 'Call Booked', 'Proposal', 'Negotiation'].includes(l.stage);
-      const isFollowUpDue = l.nextActionDate && l.nextActionDate <= todayStr;
-      
-      return isFollowUpDue || isPipelineReady;
-    }).sort((a, b) => {
-      if (a.nextActionDate !== b.nextActionDate) {
-        if (!a.nextActionDate) return 1;
-        if (!b.nextActionDate) return -1;
-        return a.nextActionDate < b.nextActionDate ? -1 : 1;
-      }
-      return (b.projectedCloseAmount || 0) - (a.projectedCloseAmount || 0);
-    });
+    // Load focus slots
+    let dailyFocus = ['','',''];
+    try {
+      const saved = localStorage.getItem('gos_daily_focus');
+      if (saved) dailyFocus = JSON.parse(saved);
+    } catch(e){}
 
-    // 3. Today's Calendar events
-    const todayEvents = events.filter(e => e.date === todayStr);
-    const overdueEvents = events.filter(e => {
-      const isBefore = e.date < todayStr;
-      const isPending = !['Done', 'Completed', 'Cancelled', 'Rescheduled', 'Confirmed', 'Closed', 'Won', 'Lost', 'Closed Won', 'Closed Lost'].includes(e.status);
-      return isBefore && isPending;
-    });
-    
-    const nextTask = tasks.filter(t => t.status !== 'Completed' && t.status !== 'Cancelled' && t.dueAt >= todayStr)
-      .sort((a, b) => a.dueAt < b.dueAt ? -1 : 1)[0];
+    // Upcoming deadlines
+    const upcomingTasks = tasks.filter(t => t.status !== 'Completed' && t.dueAt >= todayStr)
+      .sort((a, b) => a.dueAt < b.dueAt ? -1 : 1).slice(0, 5);
 
-    // 4. Render Layout
     container.innerHTML = `
-      <!-- Part 4 & 5: Hero Header + Weather Widget -->
       ${this.renderHeroHeader()}
 
-      <!-- Part 6: Priority Cards Grid -->
+      <!-- Priority Cards Grid -->
       <div class="gos-kpi-grid">
+        <div class="gos-kpi-card" onclick="app.navigateTo('tasks')">
+          <div class="gos-kpi-header">
+            <span class="gos-kpi-label">Tasks Today</span>
+            <span class="gos-kpi-icon">${getIconSvg('checkCircle', 18)}</span>
+          </div>
+          <div class="gos-kpi-value-wrapper">
+            <div class="gos-kpi-value">${completedTasksToday}/${tasksToday.length}</div>
+            <div class="gos-kpi-arrow">→</div>
+          </div>
+          <div class="gos-kpi-detail">Completed tasks vs total due today</div>
+        </div>
+
+        <div class="gos-kpi-card" onclick="app.navigateTo('tasks')">
+          <div class="gos-kpi-header">
+            <span class="gos-kpi-label">Overdue Tasks</span>
+            <span class="gos-kpi-icon">${getIconSvg('alert', 18)}</span>
+          </div>
+          <div class="gos-kpi-value-wrapper">
+            <div class="gos-kpi-value">${overdueTasks.length}</div>
+            <div class="gos-kpi-arrow">→</div>
+          </div>
+          <div class="gos-kpi-detail">Tasks with past due dates</div>
+        </div>
+
         <div class="gos-kpi-card" onclick="app.navigateTo('leads')">
           <div class="gos-kpi-header">
             <span class="gos-kpi-label">Follow-ups Today</span>
-            <span class="gos-kpi-icon">${getIconSvg('calendar', 18)}</span>
+            <span class="gos-kpi-icon">${getIconSvg('user', 18)}</span>
           </div>
           <div class="gos-kpi-value-wrapper">
             <div class="gos-kpi-value">${followUpsToday}</div>
             <div class="gos-kpi-arrow">→</div>
           </div>
-          <div class="gos-kpi-detail">Outreach actions scheduled today</div>
+          <div class="gos-kpi-detail">Outreach scheduling due today</div>
         </div>
 
-        <div class="gos-kpi-card" onclick="app.navigateTo('leads')">
+        <div class="gos-kpi-card" onclick="app.navigateTo('projects')">
           <div class="gos-kpi-header">
-            <span class="gos-kpi-label">Converted Leads</span>
-            <span class="gos-kpi-icon">${getIconSvg('award', 18)}</span>
+            <span class="gos-kpi-label">Active Projects</span>
+            <span class="gos-kpi-icon">${getIconSvg('folder', 18)}</span>
           </div>
           <div class="gos-kpi-value-wrapper">
-            <div class="gos-kpi-value">${convertedCount}</div>
+            <div class="gos-kpi-value">${activeProjects.length}</div>
             <div class="gos-kpi-arrow">→</div>
           </div>
-          <div class="gos-kpi-detail">Leads progressed to pipeline or won</div>
-        </div>
-
-        <div class="gos-kpi-card" onclick="app.navigateTo('leads')">
-          <div class="gos-kpi-header">
-            <span class="gos-kpi-label">Overdue Follow-ups</span>
-            <span class="gos-kpi-icon">${getIconSvg('alert', 18)}</span>
-          </div>
-          <div class="gos-kpi-value-wrapper">
-            <div class="gos-kpi-value">${overdueFollowUps}</div>
-            <div class="gos-kpi-arrow">→</div>
-          </div>
-          <div class="gos-kpi-detail">Leads with due dates in the past</div>
-        </div>
-
-        <div class="gos-kpi-card" onclick="app.navigateTo('salesPipeline')">
-          <div class="gos-kpi-header">
-            <span class="gos-kpi-label">Active Value</span>
-            <span class="gos-kpi-icon">${getIconSvg('dollarSign', 18)}</span>
-          </div>
-          <div class="gos-kpi-value-wrapper">
-            <div class="gos-kpi-value">₱${this.formatNumber(projectedValue)}</div>
-            <div class="gos-kpi-arrow">→</div>
-          </div>
-          <div class="gos-kpi-detail">Total close value of active leads</div>
+          <div class="gos-kpi-detail">Active work milestones</div>
         </div>
       </div>
 
-      <!-- Today's Schedule and Command Grid -->
+      <!-- Main Dashboard Grid -->
       <div class="gos-section-grid">
         
-        <!-- Part 7: Today's Calendar aggregates -->
-        <div class="gos-section-card">
-          <div class="gos-section-card-header">
-            <span class="gos-section-card-title">📅 Today's Calendar & Aggregates</span>
+        <!-- Left Panel: Priorities & Projects -->
+        <div class="gos-section-card" style="display:flex; flex-direction:column; gap:16px">
+          <div>
+            <div class="gos-section-card-header" style="padding:0 0 12px">
+              <span class="gos-section-card-title">🎯 Daily Focus Priorities</span>
+            </div>
+            <div class="daily-focus-row">
+              <input class="daily-focus-input" value="${this._esc(dailyFocus[0])}" placeholder="Priority 1..." onchange="app.saveDailyFocus(0, this.value)">
+              <input class="daily-focus-input" value="${this._esc(dailyFocus[1])}" placeholder="Priority 2..." onchange="app.saveDailyFocus(1, this.value)">
+              <input class="daily-focus-input" value="${this._esc(dailyFocus[2])}" placeholder="Priority 3..." onchange="app.saveDailyFocus(2, this.value)">
+            </div>
           </div>
-          <div class="gos-section-card-body">
-            <div class="schedule-summary-box">
-              ${todayEvents.length === 0 && overdueEvents.length === 0 && !nextTask ? `
-                <div class="gos-empty" style="padding:40px 20px">
-                  <span class="gos-empty-icon">☕</span>
-                  <span class="gos-empty-title">Your schedule is clear today</span>
-                  <span class="gos-empty-desc">Take some time to network or plan content.</span>
+
+          <div>
+            <div class="gos-section-card-header" style="padding:12px 0">
+              <span class="gos-section-card-title">📁 Active Projects</span>
+            </div>
+            <div class="gos-section-card-body" style="padding:0">
+              ${projects.length === 0 ? `
+                <div class="gos-empty" style="padding:20px 0">
+                  <span class="gos-empty-desc">No active projects.</span>
+                </div>
+              ` : projects.slice(0, 3).map(p => {
+                const linkedTasks = tasks.filter(t => t.projectId === p.projectId);
+                const completed = linkedTasks.filter(t => t.status === 'Completed').length;
+                const progress = linkedTasks.length ? Math.round((completed / linkedTasks.length) * 100) : 0;
+                return `
+                  <div style="margin-bottom:12px" onclick="app.navigateTo('projects')">
+                    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px">
+                      <strong>${this._esc(p.projectName)}</strong>
+                      <span>${progress}%</span>
+                    </div>
+                    <div class="progress-bar-container">
+                      <div class="progress-bar-fill" style="width: ${progress}%"></div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Panel: Quick Capture & Deadlines -->
+        <div class="gos-section-card" style="display:flex; flex-direction:column; gap:16px">
+          <div>
+            <div class="gos-section-card-header" style="padding:0 0 12px">
+              <span class="gos-section-card-title">📥 Quick Capture Inbox</span>
+            </div>
+            <div class="quick-capture-container">
+              <input class="quick-capture-input" id="dashboard-quick-capture" placeholder="Capture idea or task instantly..." onkeydown="if(event.key==='Enter') app.quickCaptureDashboard()">
+              <button class="quick-capture-btn" onclick="app.quickCaptureDashboard()">Capture</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="gos-section-card-header" style="padding:12px 0">
+              <span class="gos-section-card-title">⏳ Upcoming Agenda</span>
+            </div>
+            <div class="gos-section-card-body" style="padding:0">
+              ${upcomingTasks.length === 0 ? `
+                <div class="gos-empty" style="padding:20px 0">
+                  <span class="gos-empty-desc">All caught up!</span>
                 </div>
               ` : `
                 <ul class="gos-task-list">
-                  <!-- Scheduled Calls Today -->
-                  ${todayEvents.filter(e => e.type.toLowerCase().includes('call') || e.status === 'Call Booked').map(e => `
-                    <li class="gos-task-item event-call" onclick="app.openRecordPanel('${e.viewType}', '${e.id}')">
-                      <span class="task-badge-icon">📞</span>
+                  ${upcomingTasks.map(t => `
+                    <li class="gos-task-item" onclick="app.openTaskPanel('${t.taskId}')">
                       <div class="gos-task-info">
-                        <div class="gos-task-title">Call: ${e.name}</div>
-                        <div class="gos-task-meta">
-                          <span>${e.time}</span>
-                          ${this.renderBadge(e.priority)}
-                          <span>${settingsEngine.getModuleLabel(VIEW_TO_MODULE[e.viewType])}</span>
-                        </div>
+                        <span class="gos-task-title">${this._esc(t.title)}</span>
+                        <div class="gos-task-meta">Due ${t.dueAt} · ${this.renderBadge(t.priority)}</div>
                       </div>
                     </li>
                   `).join('')}
-
-                  <!-- Scheduled Follow-ups Today -->
-                  ${todayEvents.filter(e => e.type === 'Follow-up').map(e => `
-                    <li class="gos-task-item event-followup" onclick="app.openRecordPanel('${e.viewType}', '${e.id}')">
-                      <span class="task-badge-icon">✉️</span>
-                      <div class="gos-task-info">
-                        <div class="gos-task-title">Follow-up: ${e.name}</div>
-                        <div class="gos-task-meta">
-                          <span>${e.time}</span>
-                          ${this.renderBadge(e.priority)}
-                          <span>${e.nextAction}</span>
-                        </div>
-                      </div>
-                    </li>
-                  `).join('')}
-
-                  <!-- Overdue Actions -->
-                  ${overdueEvents.slice(0, 3).map(e => `
-                    <li class="gos-task-item overdue" onclick="app.openRecordPanel('${e.viewType}', '${e.id}')">
-                      <span class="task-badge-icon text-red">⚠️</span>
-                      <div class="gos-task-info">
-                        <div class="gos-task-title">Overdue: ${e.name}</div>
-                        <div class="gos-task-meta">
-                          <span class="text-red font-bold">Due ${e.date}</span>
-                          <span>${e.type}</span>
-                          ${this.renderBadge(e.priority)}
-                        </div>
-                      </div>
-                    </li>
-                  `).join('')}
-
-                  <!-- Next Upcoming Manual Task -->
-                  ${nextTask ? `
-                    <li class="gos-task-item next-task" onclick="app.openTaskPanel('${nextTask.taskId}')">
-                      <span class="task-badge-icon">📝</span>
-                      <div class="gos-task-info">
-                        <div class="gos-task-title">Next Task: ${nextTask.title}</div>
-                        <div class="gos-task-meta">
-                          <span class="${isOverdue(nextTask.dueAt) ? 'text-red font-bold' : ''}">Due ${nextTask.dueAt}</span>
-                          ${this.renderBadge(nextTask.priority)}
-                        </div>
-                      </div>
-                    </li>
-                  ` : ''}
                 </ul>
               `}
             </div>
           </div>
         </div>
 
-        <!-- Today's Action Center & Table / Mobile Cards -->
-        <div class="gos-section-card" style="grid-column: span 2">
-          <div class="gos-section-card-header">
-            <span class="gos-section-card-title">🔥 Today's Action Center</span>
-            <span class="gos-table-count">${todayActionsList.length} leads</span>
           </div>
           <div class="gos-section-card-body" style="padding:0">
             ${todayActionsList.length === 0 ? `
@@ -1423,6 +1511,12 @@ class GeloGrowthOS {
       'scc': { data: this.data.sccContent, idKey: 'contentId' },
       'calmera': { data: this.data.calmeraOrders, idKey: 'orderId' },
       'repurposing': { data: this.data.repurposeOutputs, idKey: 'outputId' },
+      'tasks': { data: this.data.tasks, idKey: 'taskId' },
+      'projects': { data: this.data.projects, idKey: 'projectId' },
+      'clients': { data: this.data.clients, idKey: 'clientId' },
+      'goals': { data: this.data.goals, idKey: 'goalId' },
+      'notes': { data: this.data.notes, idKey: 'noteId' },
+      'sops': { data: this.data.sops, idKey: 'sopId' },
     };
 
     const config = dataMap[viewType];
@@ -2586,6 +2680,12 @@ class GeloGrowthOS {
       case 'scc': return record.title;
       case 'calmera': return `${record.customerName} — ${record.externalOrderRef}`;
       case 'repurposing': return record.angleOrHook;
+      case 'tasks': return record.title || 'Task Details';
+      case 'projects': return record.projectName || 'Project Details';
+      case 'clients': return record.clientName || 'Client Details';
+      case 'goals': return record.goalName || 'Goal Details';
+      case 'notes': return record.title || 'Note Details';
+      case 'sops': return record.processTitle || 'SOP Details';
       default: return 'Record Details';
     }
   }
@@ -2597,6 +2697,12 @@ class GeloGrowthOS {
       case 'scc': return this.renderSCCDetail(record);
       case 'calmera': return this.renderCalmeraDetail(record);
       case 'repurposing': return this.renderRepurposeDetail(record);
+      case 'tasks': return this.renderTaskDetail(record);
+      case 'projects': return this.renderProjectDetail(record);
+      case 'clients': return this.renderClientDetail(record);
+      case 'goals': return this.renderGoalDetail(record);
+      case 'notes': return this.renderNoteDetail(record);
+      case 'sops': return this.renderSOPDetail(record);
       default: return '';
     }
   }
@@ -2938,6 +3044,102 @@ class GeloGrowthOS {
           <select class="gos-form-select" name="preferredChannel"><option>Email</option><option>SMS</option><option>Phone</option></select>
         </div>
       `;
+      case 'tasks': return `
+        <div class="gos-form-group"><label class="gos-form-label">Task Title *</label><input class="gos-form-input" name="title" required></div>
+        <div class="gos-form-row">
+          <div class="gos-form-group">
+            <label class="gos-form-label">Priority</label>
+            <select class="gos-form-select" name="priority">
+              <option>Normal</option>
+              <option>Low</option>
+              <option>High</option>
+              <option>Urgent</option>
+            </select>
+          </div>
+          <div class="gos-form-group"><label class="gos-form-label">Due Date</label><input class="gos-form-input" type="date" name="dueAt"></div>
+        </div>
+        <div class="gos-form-row">
+          <div class="gos-form-group">
+            <label class="gos-form-label">Project</label>
+            <select class="gos-form-select" name="projectId">
+              <option value="">None</option>
+              ${(this.data.projects || []).map(p => `<option value="${p.projectId}">${p.projectName}</option>`).join('')}
+            </select>
+          </div>
+          <div class="gos-form-group">
+            <label class="gos-form-label">Client</label>
+            <select class="gos-form-select" name="clientId">
+              <option value="">None</option>
+              ${(this.data.clients || []).map(c => `<option value="${c.clientId}">${c.clientName}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="gos-form-group"><label class="gos-form-label">Notes</label><textarea class="gos-form-textarea" name="notes" rows="3"></textarea></div>
+      `;
+      case 'projects': return `
+        <div class="gos-form-group"><label class="gos-form-label">Project Name *</label><input class="gos-form-input" name="projectName" required></div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Deadline</label><input class="gos-form-input" type="date" name="deadline"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Budget (₱)</label><input class="gos-form-input" type="number" name="budget"></div>
+        </div>
+        <div class="gos-form-group">
+          <label class="gos-form-label">Client</label>
+          <select class="gos-form-select" name="clientId">
+            <option value="">None</option>
+            ${(this.data.clients || []).map(c => `<option value="${c.clientId}">${c.clientName}</option>`).join('')}
+          </select>
+        </div>
+      `;
+      case 'clients': return `
+        <div class="gos-form-group"><label class="gos-form-label">Client Name *</label><input class="gos-form-input" name="clientName" required></div>
+        <div class="gos-form-group"><label class="gos-form-label">Services / Contract</label><input class="gos-form-input" name="services"></div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">End Date</label><input class="gos-form-input" type="date" name="endDate"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Account Value (₱)</label><input class="gos-form-input" type="number" name="accountValue"></div>
+        </div>
+      `;
+      case 'goals': return `
+        <div class="gos-form-group"><label class="gos-form-label">Goal Name *</label><input class="gos-form-input" name="goalName" required></div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Target Metric</label><input class="gos-form-input" name="targetMetric" placeholder="e.g. 100000"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Current Metric</label><input class="gos-form-input" name="currentMetric" value="0"></div>
+        </div>
+      `;
+      case 'habits': return `
+        <div class="gos-form-group"><label class="gos-form-label">Habit Name *</label><input class="gos-form-input" name="habitName" required></div>
+        <div class="gos-form-group">
+          <label class="gos-form-label">Frequency</label>
+          <select class="gos-form-select" name="frequency">
+            <option>Daily</option>
+            <option>Weekly</option>
+          </select>
+        </div>
+      `;
+      case 'learning': return `
+        <div class="gos-form-group"><label class="gos-form-label">Topic / Resource Title *</label><input class="gos-form-input" name="title" required></div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Category</label><input class="gos-form-input" name="category" placeholder="e.g. Book, Course"></div>
+          <div class="gos-form-group">
+            <label class="gos-form-label">Status</label>
+            <select class="gos-form-select" name="status">
+              <option>To Read</option>
+              <option>In Progress</option>
+              <option>Completed</option>
+            </select>
+          </div>
+        </div>
+      `;
+      case 'notes': return `
+        <div class="gos-form-group"><label class="gos-form-label">Note Title *</label><input class="gos-form-input" name="title" required></div>
+        <div class="gos-form-group"><label class="gos-form-label">Content</label><textarea class="gos-form-textarea" name="content" rows="6" placeholder="Type notes here..."></textarea></div>
+      `;
+      case 'sops': return `
+        <div class="gos-form-group"><label class="gos-form-label">Process Title *</label><input class="gos-form-input" name="processTitle" required></div>
+        <div class="gos-form-group"><label class="gos-form-label">Steps (One per line) *</label><textarea class="gos-form-textarea" name="steps" rows="6" placeholder="Step 1...\nStep 2..." required></textarea></div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Version</label><input class="gos-form-input" name="version" value="1.0"></div>
+        </div>
+      `;
       default: return `
         <div class="gos-form-group"><label class="gos-form-label">Title *</label><input class="gos-form-input" name="title" required></div>
         <div class="gos-form-group"><label class="gos-form-label">Notes</label><textarea class="gos-form-textarea" name="notes" rows="3"></textarea></div>
@@ -3175,6 +3377,112 @@ class GeloGrowthOS {
         this.data.calmeraOrders.push(newRecord);
         break;
       }
+      case 'tasks': {
+        newRecord = {
+          taskId: `T-${String((this.data.tasks || []).length + 1).padStart(4, '0')}`,
+          title: data.title,
+          status: 'To Do',
+          priority: data.priority || 'Normal',
+          dueAt: data.dueAt || '',
+          projectId: data.projectId || '',
+          clientId: data.clientId || '',
+          notes: data.notes || '',
+          createdAt: today,
+        };
+        if (!this.data.tasks) this.data.tasks = [];
+        this.data.tasks.push(newRecord);
+        break;
+      }
+      case 'projects': {
+        newRecord = {
+          projectId: `PRJ-${String((this.data.projects || []).length + 1).padStart(4, '0')}`,
+          projectName: data.projectName,
+          deadline: data.deadline || '',
+          progress: 0,
+          budget: parseFloat(data.budget) || 0,
+          clientId: data.clientId || '',
+          createdAt: today,
+          updatedAt: today,
+        };
+        if (!this.data.projects) this.data.projects = [];
+        this.data.projects.push(newRecord);
+        break;
+      }
+      case 'clients': {
+        newRecord = {
+          clientId: `CL-${String((this.data.clients || []).length + 1).padStart(4, '0')}`,
+          clientName: data.clientName,
+          services: data.services || '',
+          endDate: data.endDate || '',
+          accountValue: parseFloat(data.accountValue) || 0,
+          createdAt: today,
+          updatedAt: today,
+        };
+        if (!this.data.clients) this.data.clients = [];
+        this.data.clients.push(newRecord);
+        break;
+      }
+      case 'goals': {
+        newRecord = {
+          goalId: `G-${String((this.data.goals || []).length + 1).padStart(4, '0')}`,
+          goalName: data.goalName,
+          targetMetric: data.targetMetric || '',
+          currentMetric: data.currentMetric || '0',
+          createdAt: today,
+        };
+        if (!this.data.goals) this.data.goals = [];
+        this.data.goals.push(newRecord);
+        break;
+      }
+      case 'habits': {
+        newRecord = {
+          habitId: `H-${String((this.data.habits || []).length + 1).padStart(4, '0')}`,
+          habitName: data.habitName,
+          frequency: data.frequency || 'Daily',
+          streak: 0,
+          history: '{}',
+          createdAt: today,
+        };
+        if (!this.data.habits) this.data.habits = [];
+        this.data.habits.push(newRecord);
+        break;
+      }
+      case 'learning': {
+        newRecord = {
+          learningId: `L-${String((this.data.learning || []).length + 1).padStart(4, '0')}`,
+          title: data.title,
+          category: data.category || '',
+          status: data.status || 'To Read',
+          createdAt: today,
+        };
+        if (!this.data.learning) this.data.learning = [];
+        this.data.learning.push(newRecord);
+        break;
+      }
+      case 'notes': {
+        newRecord = {
+          noteId: `N-${String((this.data.notes || []).length + 1).padStart(4, '0')}`,
+          title: data.title,
+          content: data.content || '',
+          createdAt: today,
+        };
+        if (!this.data.notes) this.data.notes = [];
+        this.data.notes.push(newRecord);
+        break;
+      }
+      case 'sops': {
+        const stepLines = (data.steps || '').split('\n').map(l => l.trim()).filter(Boolean);
+        newRecord = {
+          sopId: `SOP-${String((this.data.sops || []).length + 1).padStart(4, '0')}`,
+          processTitle: data.processTitle,
+          steps: JSON.stringify(stepLines),
+          version: data.version || '1.0',
+          lastUpdated: today,
+        };
+        if (!this.data.sops) this.data.sops = [];
+        this.data.sops.push(newRecord);
+        break;
+      }
     }
 
     this.closeModal('add-modal');
@@ -3194,6 +3502,14 @@ class GeloGrowthOS {
         'prime': 'primePipeline',
         'scc': 'sccContent',
         'calmera': 'calmeraOrders',
+        'tasks': 'tasks',
+        'projects': 'projects',
+        'clients': 'clients',
+        'goals': 'goals',
+        'habits': 'habits',
+        'learning': 'learning',
+        'notes': 'notes',
+        'sops': 'sops',
       };
       const tabKey = tabMap[this.currentView];
       if (tabKey) {
@@ -3423,6 +3739,7 @@ class GeloGrowthOS {
       if (!alive) {
         this.showToast('❌ Could not reach the Sheet API. Check your Web App URL.', 'error');
         this.updateConnectionUI('demo');
+        this.loadLocalDataFallback();
         return;
       }
 
@@ -3435,6 +3752,7 @@ class GeloGrowthOS {
       console.error('Connection error:', err);
       this.showToast('Failed to connect: ' + (err.message || 'Unknown error'), 'error');
       this.updateConnectionUI('demo');
+      this.loadLocalDataFallback();
     }
   }
 
@@ -3461,6 +3779,14 @@ class GeloGrowthOS {
         repurposeOutputs: sheetsData.repurposeOutputs || [],
         interactions: sheetsData.interactions || [],
         tasks: sheetsData.tasks || [],
+        projects: sheetsData.projects || [],
+        clients: sheetsData.clients || [],
+        areas: sheetsData.areas || [],
+        goals: sheetsData.goals || [],
+        habits: sheetsData.habits || [],
+        learning: sheetsData.learning || [],
+        notes: sheetsData.notes || [],
+        sops: sheetsData.sops || [],
       };
 
       this.sheetsConnected = true;
@@ -4373,6 +4699,7 @@ class GeloGrowthOS {
         if (lead.stage === 'Closed Won') {
           opp.dealStatus = 'Won';
           opp.closeDate = today;
+          this.triggerLeadToClientConversion(lead);
         } else if (lead.stage === 'Closed Lost') {
           opp.dealStatus = 'Lost';
           opp.closeDate = today;
@@ -5417,6 +5744,1234 @@ class GeloGrowthOS {
       this.syncStatus = 'Error';
       this.syncError = err.message || err;
       this.renderContent();
+    }
+  }
+
+  // ── My Day View & Priorities ───────────────────────────────
+  renderMyDay(container) {
+    const todayStr = getDemoToday();
+    const tasks = (this.data.tasks || []).filter(t => t.dueAt === todayStr || (t.dueAt < todayStr && t.status !== 'Completed'));
+    const leads = (this.data.linkedinLeads || []).filter(l => l.nextActionDate === todayStr && !['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage));
+
+    let dailyFocus = ['','',''];
+    try {
+      const saved = localStorage.getItem('gos_daily_focus');
+      if (saved) dailyFocus = JSON.parse(saved);
+    } catch(e){}
+
+    container.innerHTML = `
+      <div class="gos-section-card">
+        <div class="gos-section-card-header">
+          <span class="gos-section-card-title">🎯 Daily Focus Priorities (Top 3)</span>
+        </div>
+        <div class="gos-section-card-body">
+          <div class="daily-focus-row">
+            <input class="daily-focus-input" id="focus-0" value="${this._esc(dailyFocus[0])}" placeholder="Priority 1..." onchange="app.saveDailyFocus(0, this.value)">
+            <input class="daily-focus-input" id="focus-1" value="${this._esc(dailyFocus[1])}" placeholder="Priority 2..." onchange="app.saveDailyFocus(1, this.value)">
+            <input class="daily-focus-input" id="focus-2" value="${this._esc(dailyFocus[2])}" placeholder="Priority 3..." onchange="app.saveDailyFocus(2, this.value)">
+          </div>
+        </div>
+      </div>
+
+      <div class="gos-section-card" style="margin-top:20px">
+        <div class="gos-section-card-header">
+          <span class="gos-section-card-title">📝 Today's Agenda & Checklist</span>
+          <button class="btn-primary btn-sm" onclick="app.openAddTaskModal('my-day')">+ Add Task</button>
+        </div>
+        <div class="gos-section-card-body" style="padding:0">
+          ${tasks.length === 0 && leads.length === 0 ? `
+            <div class="gos-empty" style="padding:40px 20px">
+              <span class="gos-empty-icon">☕</span>
+              <span class="gos-empty-title">All tasks completed for today!</span>
+              <span class="gos-empty-desc">Enjoy your day or capture ideas in the Inbox.</span>
+            </div>
+          ` : `
+            <ul class="gos-task-list">
+              ${tasks.map(t => `
+                <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}">
+                  <input type="checkbox" class="gos-task-checkbox" ${t.status === 'Completed' ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
+                  <div class="gos-task-info" onclick="app.openTaskPanel('${t.taskId}')" style="flex:1">
+                    <span class="gos-task-title">${this._esc(t.title)}</span>
+                    <div class="gos-task-meta">
+                      <span class="${t.dueAt < todayStr ? 'text-red font-bold' : ''}">Due ${t.dueAt}</span>
+                      ${this.renderBadge(t.priority)}
+                    </div>
+                  </div>
+                </li>
+              `).join('')}
+              ${leads.map(l => `
+                <li class="gos-task-item outreach-due">
+                  <span class="task-badge-icon">📞</span>
+                  <div class="gos-task-info" onclick="app.openRecordPanel('linkedin', '${l.leadId}')" style="flex:1">
+                    <span class="gos-task-title">Follow-up: ${this._esc(l.contactName)}</span>
+                    <div class="gos-task-meta">
+                      <span>Outreach Scheduled Today</span>
+                      ${this.renderBadge(l.priority)}
+                    </div>
+                  </div>
+                </li>
+              `).join('')}
+            </ul>
+          `}
+        </div>
+      </div>
+    `;
+  }
+
+  saveDailyFocus(idx, val) {
+    let dailyFocus = ['','',''];
+    try {
+      const saved = localStorage.getItem('gos_daily_focus');
+      if (saved) dailyFocus = JSON.parse(saved);
+    } catch(e){}
+    dailyFocus[idx] = val;
+    localStorage.setItem('gos_daily_focus', JSON.stringify(dailyFocus));
+    this.showToast('Daily priorities updated!', 'success');
+  }
+
+  // ── Inbox (Quick Capture) View ──────────────────────────────
+  renderInbox(container) {
+    const inboxItems = (this.data.tasks || []).filter(t => t.status === 'Inbox');
+    container.innerHTML = `
+      <div class="gos-section-card">
+        <div class="gos-section-card-header">
+          <span class="gos-section-card-title">📥 Quick Capture</span>
+        </div>
+        <div class="gos-section-card-body">
+          <div class="quick-capture-container">
+            <input class="quick-capture-input" id="inbox-quick-capture-input" placeholder="Type a task, project idea, or note to capture instantly..." onkeydown="if(event.key==='Enter') app.quickCaptureInbox()">
+            <button class="quick-capture-btn" onclick="app.quickCaptureInbox()">Capture</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="gos-section-card" style="margin-top:20px">
+        <div class="gos-section-card-header">
+          <span class="gos-section-card-title">Items in Inbox</span>
+          <span class="gos-table-count">${inboxItems.length} items</span>
+        </div>
+        <div class="gos-section-card-body" style="padding:0">
+          ${inboxItems.length === 0 ? `
+            <div class="gos-empty" style="padding:40px 20px">
+              <span class="gos-empty-icon">🍃</span>
+              <span class="gos-empty-title">Inbox is clear!</span>
+              <span class="gos-empty-desc">Your capture queue is clean.</span>
+            </div>
+          ` : `
+            <ul class="gos-task-list">
+              ${inboxItems.map(t => `
+                <li class="gos-task-item">
+                  <div class="gos-task-info" style="flex:1">
+                    <span class="gos-task-title" style="font-weight:600">${this._esc(t.title)}</span>
+                    <div class="gos-task-meta">Captured ${t.createdAt || getDemoToday()}</div>
+                  </div>
+                  <div style="display:flex; gap:8px">
+                    <button class="btn-secondary btn-sm" onclick="app.convertInboxItem('${t.taskId}', 'task')">Task</button>
+                    <button class="btn-secondary btn-sm" onclick="app.convertInboxItem('${t.taskId}', 'project')">Project</button>
+                    <button class="btn-secondary btn-sm" onclick="app.convertInboxItem('${t.taskId}', 'note')">Note</button>
+                    <button class="btn-danger btn-sm" onclick="app.deleteTask('${t.taskId}')">✕</button>
+                  </div>
+                </li>
+              `).join('')}
+            </ul>
+          `}
+        </div>
+      </div>
+    `;
+  }
+
+  quickCaptureInbox() {
+    const input = document.getElementById('inbox-quick-capture-input');
+    if (!input || !input.value.trim()) return;
+    const title = input.value.trim();
+    const today = getDemoToday();
+    const newTask = {
+      taskId: `T-${String((this.data.tasks || []).length + 1).padStart(4, '0')}`,
+      title,
+      status: 'Inbox',
+      priority: 'Normal',
+      dueAt: today,
+      createdAt: today,
+      areaId: '',
+      projectId: '',
+      clientId: '',
+      notes: ''
+    };
+    if (!this.data.tasks) this.data.tasks = [];
+    this.data.tasks.push(newTask);
+    input.value = '';
+    this.showToast('Captured in Inbox!', 'success');
+    this.render();
+  }
+
+  convertInboxItem(taskId, type) {
+    const task = this.data.tasks.find(t => t.taskId === taskId);
+    if (!task) return;
+    if (type === 'task') {
+      task.status = 'To Do';
+      this.showToast('Converted inbox item to To Do Task!', 'success');
+      this.render();
+      if (this.sheetsConnected && task._rowIndex !== undefined) {
+        sheetsService.updateRecord('tasks', task._rowIndex, task);
+      }
+    } else if (type === 'project') {
+      this.data.tasks = this.data.tasks.filter(t => t.taskId !== taskId);
+      const projectId = `PRJ-${String((this.data.projects || []).length + 1).padStart(4, '0')}`;
+      const newProj = {
+        projectId,
+        projectName: task.title,
+        deadline: getDemoToday(),
+        progress: 0,
+        budget: 0,
+      };
+      if (!this.data.projects) this.data.projects = [];
+      this.data.projects.push(newProj);
+      this.showToast('Converted inbox item to Project!', 'success');
+      this.render();
+      if (this.sheetsConnected) {
+        sheetsService.appendRecord('projects', newProj)
+          .then(() => {
+            if (task._rowIndex !== undefined) sheetsService.deleteRecord('tasks', task._rowIndex);
+          });
+      }
+    } else if (type === 'note') {
+      this.data.tasks = this.data.tasks.filter(t => t.taskId !== taskId);
+      const noteId = `N-${String((this.data.notes || []).length + 1).padStart(4, '0')}`;
+      const newNote = {
+        noteId,
+        title: task.title,
+        content: '',
+        createdAt: getDemoToday(),
+      };
+      if (!this.data.notes) this.data.notes = [];
+      this.data.notes.push(newNote);
+      this.showToast('Converted inbox item to Note!', 'success');
+      this.render();
+      if (this.sheetsConnected) {
+        sheetsService.appendRecord('notes', newNote)
+          .then(() => {
+            if (task._rowIndex !== undefined) sheetsService.deleteRecord('tasks', task._rowIndex);
+          });
+      }
+    }
+  }
+
+  // ── Universal Task Management ───────────────────────────────
+  renderTasks(container) {
+    const tasks = this.data.tasks || [];
+    const projects = this.data.projects || [];
+
+    if (!this.taskFilters) {
+      this.taskFilters = {
+        area: 'all',
+        project: 'all',
+        priority: 'all',
+        status: 'all',
+        viewMode: 'list'
+      };
+    }
+
+    let filtered = [...tasks].filter(t => t.status !== 'Inbox');
+    if (this.taskFilters.priority !== 'all') {
+      filtered = filtered.filter(t => t.priority === this.taskFilters.priority);
+    }
+    if (this.taskFilters.status !== 'all') {
+      filtered = filtered.filter(t => t.status === this.taskFilters.status);
+    }
+    if (this.taskFilters.project !== 'all') {
+      filtered = filtered.filter(t => t.projectId === this.taskFilters.project);
+    }
+
+    const todayStr = getDemoToday();
+
+    container.innerHTML = `
+      <div class="filter-bar">
+        <div class="filter-group">
+          <label class="filter-label">Status</label>
+          <select class="filter-select" onchange="app.setTaskFilter('status', this.value)">
+            <option value="all" ${this.taskFilters.status === 'all' ? 'selected' : ''}>All Statuses</option>
+            <option value="To Do" ${this.taskFilters.status === 'To Do' ? 'selected' : ''}>To Do</option>
+            <option value="In Progress" ${this.taskFilters.status === 'In Progress' ? 'selected' : ''}>In Progress</option>
+            <option value="Waiting" ${this.taskFilters.status === 'Waiting' ? 'selected' : ''}>Waiting</option>
+            <option value="Review" ${this.taskFilters.status === 'Review' ? 'selected' : ''}>Review</option>
+            <option value="Completed" ${this.taskFilters.status === 'Completed' ? 'selected' : ''}>Completed</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Priority</label>
+          <select class="filter-select" onchange="app.setTaskFilter('priority', this.value)">
+            <option value="all" ${this.taskFilters.priority === 'all' ? 'selected' : ''}>All Priorities</option>
+            <option value="Low" ${this.taskFilters.priority === 'Low' ? 'selected' : ''}>Low</option>
+            <option value="Medium" ${this.taskFilters.priority === 'Medium' ? 'selected' : ''}>Medium</option>
+            <option value="High" ${this.taskFilters.priority === 'High' ? 'selected' : ''}>High</option>
+            <option value="Urgent" ${this.taskFilters.priority === 'Urgent' ? 'selected' : ''}>Urgent</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">Project</label>
+          <select class="filter-select" onchange="app.setTaskFilter('project', this.value)">
+            <option value="all" ${this.taskFilters.project === 'all' ? 'selected' : ''}>All Projects</option>
+            ${projects.map(p => `<option value="${p.projectId}" ${this.taskFilters.project === p.projectId ? 'selected' : ''}>${this._esc(p.projectName)}</option>`).join('')}
+          </select>
+        </div>
+        <div style="flex-grow:1"></div>
+        <div class="filter-group" style="flex-direction:row; gap:8px; align-items:center">
+          <button class="btn-secondary btn-sm" onclick="app.setTaskViewMode('list')">List</button>
+          <button class="btn-secondary btn-sm" onclick="app.setTaskViewMode('kanban')">Kanban</button>
+          <button class="btn-primary btn-sm" onclick="app.openAddTaskModal('tasks')">+ Add Task</button>
+        </div>
+      </div>
+
+      ${this.taskFilters.viewMode === 'list' ? `
+        <div class="gos-section-card" style="margin-top:16px">
+          <div class="gos-section-card-body" style="padding:0">
+            ${filtered.length === 0 ? `
+              <div class="gos-empty" style="padding:40px 20px">
+                <span class="gos-empty-icon">📝</span>
+                <span class="gos-empty-title">No tasks found</span>
+                <span class="gos-empty-desc">Create a new task to get started.</span>
+              </div>
+            ` : `
+              <ul class="gos-task-list">
+                ${filtered.map(t => {
+                  const proj = projects.find(p => p.projectId === t.projectId);
+                  return `
+                    <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}">
+                      <input type="checkbox" class="gos-task-checkbox" ${t.status === 'Completed' ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
+                      <div class="gos-task-info" onclick="app.openTaskPanel('${t.taskId}')" style="flex:1">
+                        <span class="gos-task-title">${this._esc(t.title)}</span>
+                        <div class="gos-task-meta">
+                          <span class="${t.dueAt < todayStr && t.status !== 'Completed' ? 'text-red font-bold' : ''}">Due ${t.dueAt || 'No Date'}</span>
+                          ${this.renderBadge(t.priority)}
+                          ${proj ? `<span class="kanban-card-project">${this._esc(proj.projectName)}</span>` : ''}
+                        </div>
+                      </div>
+                      <button class="btn-danger btn-sm" onclick="app.deleteTask('${t.taskId}')">✕</button>
+                    </li>
+                  `;
+                }).join('')}
+              </ul>
+            `}
+          </div>
+        </div>
+      ` : `
+        <div class="kanban-board">
+          ${['To Do', 'In Progress', 'Waiting', 'Review', 'Completed'].map(colStatus => {
+            const colTasks = filtered.filter(t => t.status === colStatus);
+            return `
+              <div class="kanban-column" id="kanban-col-${colStatus.replace(' ', '-')}" ondragover="event.preventDefault()" ondrop="app.handleTaskDrop(event, '${colStatus}')">
+                <div class="kanban-column-header">
+                  <span class="kanban-column-title">${colStatus}</span>
+                  <span class="kanban-column-count">${colTasks.length}</span>
+                </div>
+                <div class="kanban-cards-container">
+                  ${colTasks.map(t => {
+                    const proj = projects.find(p => p.projectId === t.projectId);
+                    return `
+                      <div class="kanban-card" draggable="true" ondragstart="app.handleTaskDragStart(event, '${t.taskId}')" onclick="app.openTaskPanel('${t.taskId}')">
+                        <div class="kanban-card-title">${this._esc(t.title)}</div>
+                        <div class="kanban-card-meta">
+                          <span>${t.dueAt || 'No Date'}</span>
+                          ${this.renderBadge(t.priority)}
+                        </div>
+                        ${proj ? `<div style="margin-top:6px"><span class="kanban-card-project">${this._esc(proj.projectName)}</span></div>` : ''}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `}
+    `;
+  }
+
+  handleTaskDragStart(e, taskId) {
+    e.dataTransfer.setData('text/plain', taskId);
+  }
+
+  handleTaskDrop(e, status) {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData('text/plain');
+    const task = this.data.tasks.find(t => t.taskId === taskId);
+    if (task && task.status !== status) {
+      task.status = status;
+      this.showToast(`Updated task status to ${status}`, 'success');
+      this.render();
+      if (this.sheetsConnected && task._rowIndex !== undefined) {
+        sheetsService.updateRecord('tasks', task._rowIndex, { status });
+      }
+    }
+  }
+
+  setTaskFilter(key, val) {
+    this.taskFilters[key] = val;
+    this.renderContent();
+  }
+
+  setTaskViewMode(mode) {
+    this.taskFilters.viewMode = mode;
+    this.renderContent();
+  }
+
+  toggleTaskStatus(taskId) {
+    const task = this.data.tasks.find(t => t.taskId === taskId);
+    if (task) {
+      task.status = task.status === 'Completed' ? 'To Do' : 'Completed';
+      this.showToast(`Task status updated!`, 'success');
+      this.render();
+      if (this.sheetsConnected && task._rowIndex !== undefined) {
+        sheetsService.updateRecord('tasks', task._rowIndex, { status: task.status });
+      }
+    }
+  }
+
+  deleteTask(taskId) {
+    const task = this.data.tasks.find(t => t.taskId === taskId);
+    if (task) {
+      this.data.tasks = this.data.tasks.filter(t => t.taskId !== taskId);
+      this.showToast('Task deleted successfully.', 'info');
+      this.render();
+      if (this.sheetsConnected && task._rowIndex !== undefined) {
+        sheetsService.deleteRecord('tasks', task._rowIndex);
+      }
+    }
+  }
+
+  openAddTaskModal(source) {
+    this.currentView = 'tasks';
+    this.openAddModal();
+  }
+
+  // ── Project Management ──────────────────────────────────────
+  renderProjects(container) {
+    const projects = this.data.projects || [];
+    const tasks = this.data.tasks || [];
+    const clients = this.data.clients || [];
+
+    container.innerHTML = `
+      <div class="filter-bar">
+        <span class="gos-table-count">${projects.length} projects</span>
+        <div style="flex-grow:1"></div>
+        <button class="btn-primary btn-sm" onclick="app.openAddProjectModal()">+ Add Project</button>
+      </div>
+
+      <div class="sop-grid" style="margin-top:16px">
+        ${projects.length === 0 ? `
+          <div class="gos-empty" style="padding:40px 20px; grid-column: 1 / -1">
+            <span class="gos-empty-icon">📁</span>
+            <span class="gos-empty-title">No projects active</span>
+            <span class="gos-empty-desc">Create your first project to organize your workflows.</span>
+          </div>
+        ` : projects.map(p => {
+          const linkedTasks = tasks.filter(t => t.projectId === p.projectId);
+          const completedTasks = linkedTasks.filter(t => t.status === 'Completed');
+          const calculatedProgress = linkedTasks.length ? Math.round((completedTasks.length / linkedTasks.length) * 100) : 0;
+          const displayProgress = p.progress !== undefined ? p.progress : calculatedProgress;
+          const client = clients.find(c => c.clientId === p.clientId);
+
+          return `
+            <div class="sop-card" onclick="app.openProjectPanel('${p.projectId}')">
+              <div>
+                <div class="sop-title">${this._esc(p.projectName)}</div>
+                ${client ? `<div class="note-meta" style="margin-bottom:8px">Client: ${this._esc(client.clientName)}</div>` : ''}
+                <div class="note-meta">Deadline: ${p.deadline || 'No Deadline'}</div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:12px; color:var(--text-muted)">
+                  <span>Progress</span>
+                  <span>${displayProgress}%</span>
+                </div>
+                <div class="progress-bar-container">
+                  <div class="progress-bar-fill" style="width: ${displayProgress}%"></div>
+                </div>
+                <div style="margin-top:12px; display:flex; justify-content:flex-end">
+                  <button class="btn-danger btn-sm" onclick="event.stopPropagation(); app.deleteProject('${p.projectId}')">Delete</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  openAddProjectModal() {
+    this.currentView = 'projects';
+    this.openAddModal();
+  }
+
+  deleteProject(projectId) {
+    const proj = this.data.projects.find(p => p.projectId === projectId);
+    if (proj) {
+      this.data.projects = this.data.projects.filter(p => p.projectId !== projectId);
+      this.showToast('Project deleted.', 'info');
+      this.render();
+      if (this.sheetsConnected && proj._rowIndex !== undefined) {
+        sheetsService.deleteRecord('projects', proj._rowIndex);
+      }
+    }
+  }
+
+  // ── Client Management ───────────────────────────────────────
+  renderClients(container) {
+    const clients = this.data.clients || [];
+    container.innerHTML = `
+      <div class="filter-bar">
+        <span class="gos-table-count">${clients.length} clients</span>
+        <div style="flex-grow:1"></div>
+        <button class="btn-primary btn-sm" onclick="app.openAddClientModal()">+ Add Client</button>
+      </div>
+
+      <div class="gos-section-card" style="margin-top:16px">
+        <div class="gos-section-card-body" style="padding:0">
+          ${clients.length === 0 ? `
+            <div class="gos-empty" style="padding:40px 20px">
+              <span class="gos-empty-icon">🤝</span>
+              <span class="gos-empty-title">No clients onboarded</span>
+              <span class="gos-empty-desc">When a CRM lead is closed won, you can convert them to a client.</span>
+            </div>
+          ` : `
+            <table class="gos-table">
+              <thead>
+                <tr>
+                  <th>Client Name</th>
+                  <th>Services</th>
+                  <th>End Date</th>
+                  <th>Value (₱)</th>
+                  <th style="width:80px">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${clients.map(c => `
+                  <tr class="clickable" onclick="app.openClientPanel('${c.clientId}')">
+                    <td><strong>${this._esc(c.clientName)}</strong></td>
+                    <td>${this._esc(c.services || '—')}</td>
+                    <td>${c.endDate || '—'}</td>
+                    <td>₱${Number(c.accountValue || 0).toLocaleString()}</td>
+                    <td>
+                      <button class="btn-danger btn-sm" onclick="event.stopPropagation(); app.deleteClient('${c.clientId}')">Delete</button>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `}
+        </div>
+      </div>
+    `;
+  }
+
+  openAddClientModal() {
+    this.currentView = 'clients';
+    this.openAddModal();
+  }
+
+  deleteClient(clientId) {
+    const client = this.data.clients.find(c => c.clientId === clientId);
+    if (client) {
+      this.data.clients = this.data.clients.filter(c => c.clientId !== clientId);
+      this.showToast('Client record deleted.', 'info');
+      this.render();
+      if (this.sheetsConnected && client._rowIndex !== undefined) {
+        sheetsService.deleteRecord('clients', client._rowIndex);
+      }
+    }
+  }
+
+  // ── Operations & Recurring Checklists ──────────────────────
+  renderOperations(container) {
+    const tasks = this.data.tasks || [];
+    const projects = this.data.projects || [];
+    const weeklySync = tasks.filter(t => t.title.toLowerCase().includes('sync') || t.title.toLowerCase().includes('weekly') || t.title.toLowerCase().includes('recurring'));
+
+    container.innerHTML = `
+      <div class="gos-section-grid">
+        <div class="gos-section-card">
+          <div class="gos-section-card-header">
+            <span class="gos-section-card-title">🔁 Recurring Operations Checklist</span>
+            <button class="btn-primary btn-sm" onclick="app.addOperationsChecklist()">+ Add Check</button>
+          </div>
+          <div class="gos-section-card-body" style="padding:0">
+            ${weeklySync.length === 0 ? `
+              <div class="gos-empty" style="padding:30px 10px">
+                <span class="gos-empty-desc">No recurring operational tasks mapped.</span>
+              </div>
+            ` : `
+              <ul class="gos-task-list">
+                ${weeklySync.map(t => `
+                  <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}">
+                    <input type="checkbox" class="gos-task-checkbox" ${t.status === 'Completed' ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
+                    <div class="gos-task-info">
+                      <span class="gos-task-title">${this._esc(t.title)}</span>
+                    </div>
+                  </li>
+                `).join('')}
+              </ul>
+            `}
+          </div>
+        </div>
+
+        <div class="gos-section-card">
+          <div class="gos-section-card-header">
+            <span class="gos-section-card-title">👥 Workload Analysis</span>
+          </div>
+          <div class="gos-section-card-body">
+            <div style="display:flex; justify-content:space-between; margin-bottom:12px; font-size:13px">
+              <span>Gelo (Founder / Operator)</span>
+              <strong>${tasks.filter(t => t.status !== 'Completed').length} open tasks</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:12px; font-size:13px">
+              <span>Active Projects</span>
+              <strong>${projects.length} active</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  addOperationsChecklist() {
+    const val = prompt('Enter recurring checklist task title (e.g. Weekly Team Sync):');
+    if (!val || !val.trim()) return;
+    const newTask = {
+      taskId: `T-${String((this.data.tasks || []).length + 1).padStart(4, '0')}`,
+      title: `${val.trim()} (Recurring)`,
+      status: 'To Do',
+      priority: 'Normal',
+      dueAt: getDemoToday(),
+      createdAt: getDemoToday(),
+      notes: 'Operational recurring task'
+    };
+    if (!this.data.tasks) this.data.tasks = [];
+    this.data.tasks.push(newTask);
+    this.showToast('Recurring checklist item added!', 'success');
+    this.render();
+    if (this.sheetsConnected) {
+      sheetsService.appendRecord('tasks', newTask);
+    }
+  }
+
+  // ── Finance View ───────────────────────────────────────────
+  renderFinance(container) {
+    const pipeline = this.data.primePipeline || [];
+    const wonPending = pipeline.filter(p => p.stage === 'Closed Won' || p.stage === 'Won');
+    const totalWon = wonPending.reduce((s, p) => s + (p.estimatedValue || 0), 0);
+
+    container.innerHTML = `
+      <div class="gos-kpi-grid">
+        <div class="gos-kpi-card">
+          <div class="gos-kpi-header">
+            <span class="gos-kpi-label">Total Revenue</span>
+            <span class="gos-kpi-icon">₱</span>
+          </div>
+          <div class="gos-kpi-value-wrapper">
+            <div class="gos-kpi-value">₱${totalWon.toLocaleString()}</div>
+          </div>
+          <div class="gos-kpi-detail">Revenue generated from Won pipeline deals</div>
+        </div>
+      </div>
+
+      <div class="gos-section-card" style="margin-top:20px">
+        <div class="gos-section-card-header">
+          <span class="gos-section-card-title">Pending Payments & Deliverables</span>
+        </div>
+        <div class="gos-section-card-body" style="padding:0">
+          ${wonPending.length === 0 ? `
+            <div class="gos-empty" style="padding:40px 20px">
+              <span class="gos-empty-icon">☕</span>
+              <span class="gos-empty-title">No pending won deals</span>
+              <span class="gos-empty-desc">Close leads as Closed Won to track financials here.</span>
+            </div>
+          ` : `
+            <table class="gos-table">
+              <thead>
+                <tr>
+                  <th>Deal ID</th>
+                  <th>Client / Org</th>
+                  <th>Service</th>
+                  <th>Value</th>
+                  <th>Payment Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${wonPending.map(p => `
+                  <tr>
+                    <td>${p.opportunityId}</td>
+                    <td><strong>${this._esc(p.orgName || p.contactName || '')}</strong></td>
+                    <td>${this._esc(p.serviceInterest)}</td>
+                    <td>₱${(p.estimatedValue || 0).toLocaleString()}</td>
+                    <td>${this.renderBadge(p.paymentStatus || 'Unpaid')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `}
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Notes & SOPs (Knowledge Hub) ───────────────────────────
+  renderNotes(container) {
+    const notes = this.data.notes || [];
+    container.innerHTML = `
+      <div class="filter-bar">
+        <span class="gos-table-count">${notes.length} notes</span>
+        <div style="flex-grow:1"></div>
+        <button class="btn-primary btn-sm" onclick="app.openAddNoteModal()">+ Add Note</button>
+      </div>
+
+      <div class="notes-grid" style="margin-top:16px">
+        ${notes.length === 0 ? `
+          <div class="gos-empty" style="padding:40px 20px; grid-column:1/-1">
+            <span class="gos-empty-icon">📝</span>
+            <span class="gos-empty-title">Notes library is empty</span>
+            <span class="gos-empty-desc">Capture meeting minutes and quick ideas here.</span>
+          </div>
+        ` : notes.map(n => `
+          <div class="note-card" onclick="app.openNotePanel('${n.noteId}')">
+            <div>
+              <div class="note-title">${this._esc(n.title)}</div>
+              <div style="font-size:12px; color:var(--text-secondary); max-height:80px; overflow:hidden; text-overflow:ellipsis">${this._esc(n.content || 'No content')}</div>
+            </div>
+            <div class="note-meta" style="margin-top:12px">Created ${n.createdAt}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  openAddNoteModal() {
+    this.currentView = 'notes';
+    this.openAddModal();
+  }
+
+  renderSops(container) {
+    const sops = this.data.sops || [];
+    container.innerHTML = `
+      <div class="filter-bar">
+        <span class="gos-table-count">${sops.length} SOPs</span>
+        <div style="flex-grow:1"></div>
+        <button class="btn-primary btn-sm" onclick="app.openAddSopModal()">+ Add SOP</button>
+      </div>
+
+      <div class="sop-grid" style="margin-top:16px">
+        ${sops.length === 0 ? `
+          <div class="gos-empty" style="padding:40px 20px; grid-column:1/-1">
+            <span class="gos-empty-icon">📖</span>
+            <span class="gos-empty-title">No SOPs found</span>
+            <span class="gos-empty-desc">Create standard operating procedures to organize your business processes.</span>
+          </div>
+        ` : sops.map(s => {
+          let steps = [];
+          try {
+            if (s.steps) {
+              steps = typeof s.steps === 'string' ? JSON.parse(s.steps) : s.steps;
+            }
+          } catch(e){
+            steps = (s.steps || '').split('\n').filter(Boolean);
+          }
+          return `
+            <div class="sop-card" onclick="app.openSopPanel('${s.sopId}')">
+              <div>
+                <div class="sop-title">${this._esc(s.processTitle)}</div>
+                <div class="sop-steps-count">${steps.length} steps · v${s.version || '1.0'}</div>
+                <div style="margin-top:8px">
+                  ${steps.slice(0, 2).map((step, idx) => `
+                    <div class="sop-step-item">
+                      <span class="sop-step-number">${idx + 1}</span>
+                      <span>${this._esc(step)}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              <div class="note-meta" style="margin-top:12px">Updated ${s.lastUpdated || '—'}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  openAddSopModal() {
+    this.currentView = 'sops';
+    this.openAddModal();
+  }
+
+  renderFiles(container) {
+    container.innerHTML = `
+      <div class="gos-section-card">
+        <div class="gos-section-card-header"><span class="gos-section-card-title">Drive Files & Documents</span></div>
+        <div class="gos-section-card-body">
+          <p style="font-size:13px; color:var(--text-muted)">Connect and store drives links, spreadsheet models, and resource indexes here.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  renderTemplates(container) {
+    container.innerHTML = `
+      <div class="gos-section-card">
+        <div class="gos-section-card-header"><span class="gos-section-card-title">Message Templates</span></div>
+        <div class="gos-section-card-body">
+          <p style="font-size:13px; color:var(--text-muted)">Manage outreach copywriting templates to copy-paste during outreach directly.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Personal Hub ────────────────────────────────────────────
+  renderPersonalDashboard(container) {
+    const tasks = (this.data.tasks || []).filter(t => t.title.toLowerCase().includes('personal') || t.notes?.toLowerCase().includes('personal'));
+    container.innerHTML = `
+      <div class="gos-section-card">
+        <div class="gos-section-card-header">
+          <span class="gos-section-card-title">🧘 Personal Dashboard</span>
+        </div>
+        <div class="gos-section-card-body">
+          <p style="font-size:13px; color:var(--text-muted)">Your personal growth center. Tag tasks with "personal" to keep them organized here.</p>
+        </div>
+      </div>
+
+      <div class="gos-section-card" style="margin-top:20px">
+        <div class="gos-section-card-header">
+          <span class="gos-section-card-title">Personal Checklist</span>
+          <button class="btn-primary btn-sm" onclick="app.openAddTaskModal('personal')">+ Add Task</button>
+        </div>
+        <div class="gos-section-card-body" style="padding:0">
+          ${tasks.length === 0 ? `
+            <div class="gos-empty" style="padding:30px 10px">
+              <span class="gos-empty-desc">No personal tasks.</span>
+            </div>
+          ` : `
+            <ul class="gos-task-list">
+              ${tasks.map(t => `
+                <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}">
+                  <input type="checkbox" class="gos-task-checkbox" ${t.status === 'Completed' ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
+                  <div class="gos-task-info">
+                    <span class="gos-task-title">${this._esc(t.title)}</span>
+                  </div>
+                </li>
+              `).join('')}
+            </ul>
+          `}
+        </div>
+      </div>
+    `;
+  }
+
+  renderGoals(container) {
+    const goals = this.data.goals || [];
+    container.innerHTML = `
+      <div class="filter-bar">
+        <span class="gos-table-count">${goals.length} goals</span>
+        <div style="flex-grow:1"></div>
+        <button class="btn-primary btn-sm" onclick="app.openAddGoalModal()">+ Add Goal</button>
+      </div>
+
+      <div class="sop-grid" style="margin-top:16px">
+        ${goals.length === 0 ? `
+          <div class="gos-empty" style="padding:40px 20px; grid-column:1/-1">
+            <span class="gos-empty-icon">🏆</span>
+            <span class="gos-empty-title">No goals set</span>
+            <span class="gos-empty-desc">Define key milestones for this quarter.</span>
+          </div>
+        ` : goals.map(g => {
+          const target = parseFloat(g.targetMetric) || 100;
+          const current = parseFloat(g.currentMetric) || 0;
+          const progress = Math.min(Math.round((current / target) * 100), 100);
+          return `
+            <div class="sop-card" onclick="app.openGoalPanel('${g.goalId}')">
+              <div>
+                <div class="sop-title">${this._esc(g.goalName)}</div>
+                <div class="note-meta">Target: ${g.currentMetric || 0} / ${g.targetMetric || 100}</div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:12px; color:var(--text-muted)">
+                  <span>Progress</span>
+                  <span>${progress}%</span>
+                </div>
+                <div class="progress-bar-container">
+                  <div class="progress-bar-fill" style="width: ${progress}%"></div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  openAddGoalModal() {
+    this.currentView = 'goals';
+    this.openAddModal();
+  }
+
+  renderHabits(container) {
+    const habits = this.data.habits || [];
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    container.innerHTML = `
+      <div class="filter-bar">
+        <span class="gos-table-count">${habits.length} habits</span>
+        <div style="flex-grow:1"></div>
+        <button class="btn-primary btn-sm" onclick="app.openAddHabitModal()">+ Add Habit</button>
+      </div>
+
+      <div class="habits-list" style="margin-top:16px">
+        ${habits.length === 0 ? `
+          <div class="gos-empty" style="padding:40px 20px">
+            <span class="gos-empty-icon">⭐️</span>
+            <span class="gos-empty-title">No habits tracked</span>
+            <span class="gos-empty-desc">Track weekly routines to stay aligned.</span>
+          </div>
+        ` : habits.map(h => {
+          let history = {};
+          try {
+            if (h.history) {
+              history = typeof h.history === 'string' ? JSON.parse(h.history) : h.history;
+            }
+          } catch(e){}
+          
+          return `
+            <div class="habit-row">
+              <div class="habit-info-col">
+                <div class="habit-name">${this._esc(h.habitName)}</div>
+                <div class="habit-streak">Streak: ${h.streak || 0} days · Frequency: ${h.frequency || 'Daily'}</div>
+              </div>
+              <div class="habit-days-grid">
+                ${days.map((day, idx) => {
+                  const completed = history[day] === true;
+                  return `
+                    <button class="habit-day-btn ${completed ? 'completed' : ''}" onclick="app.toggleHabitDay('${h.habitId}', '${day}')" title="${day}">
+                      ${day[0]}
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  openAddHabitModal() {
+    this.currentView = 'habits';
+    this.openAddModal();
+  }
+
+  toggleHabitDay(habitId, day) {
+    const habit = this.data.habits.find(h => h.habitId === habitId);
+    if (habit) {
+      let history = {};
+      try {
+        if (habit.history) {
+          history = typeof habit.history === 'string' ? JSON.parse(habit.history) : habit.history;
+        }
+      } catch(e){}
+      
+      history[day] = !history[day];
+      habit.history = JSON.stringify(history);
+      
+      // Calculate streak
+      let streak = 0;
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      for (let d of days) {
+        if (history[d]) streak++;
+      }
+      habit.streak = streak;
+
+      this.showToast('Habit progress updated!', 'success');
+      this.render();
+
+      if (this.sheetsConnected && habit._rowIndex !== undefined) {
+        sheetsService.updateRecord('habits', habit._rowIndex, { history: habit.history, streak: habit.streak });
+      }
+    }
+  }
+
+  renderLearning(container) {
+    const items = this.data.learning || [];
+    container.innerHTML = `
+      <div class="filter-bar">
+        <span class="gos-table-count">${items.length} materials</span>
+        <div style="flex-grow:1"></div>
+        <button class="btn-primary btn-sm" onclick="app.openAddLearningModal()">+ Add Resource</button>
+      </div>
+
+      <div class="gos-section-card" style="margin-top:16px">
+        <div class="gos-section-card-body" style="padding:0">
+          ${items.length === 0 ? `
+            <div class="gos-empty" style="padding:40px 20px">
+              <span class="gos-empty-icon">📚</span>
+              <span class="gos-empty-title">Reading list is empty</span>
+              <span class="gos-empty-desc">Store courses, books, and resources here.</span>
+            </div>
+          ` : `
+            <table class="gos-table">
+              <thead>
+                <tr>
+                  <th>Topic / Resource</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${items.map(l => `
+                  <tr>
+                    <td><strong>${this._esc(l.title || l.learningId)}</strong></td>
+                    <td>${this._esc(l.category || '—')}</td>
+                    <td>${this.renderBadge(l.status || 'To Read')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `}
+        </div>
+      </div>
+    `;
+  }
+
+  openAddLearningModal() {
+    this.currentView = 'learning';
+    this.openAddModal();
+  }
+
+  // ── Reports & Automations ──────────────────────────────────
+  renderReports(container) {
+    const tasks = this.data.tasks || [];
+    const completedTasks = tasks.filter(t => t.status === 'Completed').length;
+    const leads = this.data.linkedinLeads || [];
+    const clients = this.data.clients || [];
+
+    container.innerHTML = `
+      <div class="gos-kpi-grid">
+        <div class="gos-kpi-card">
+          <div class="gos-kpi-header"><span class="gos-kpi-label">Tasks Completed</span></div>
+          <div class="gos-kpi-value">${completedTasks}</div>
+        </div>
+        <div class="gos-kpi-card">
+          <div class="gos-kpi-header"><span class="gos-kpi-label">Active Clients</span></div>
+          <div class="gos-kpi-value">${clients.length}</div>
+        </div>
+        <div class="gos-kpi-card">
+          <div class="gos-kpi-header"><span class="gos-kpi-label">Total Leads Captured</span></div>
+          <div class="gos-kpi-value">${leads.length}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  renderAutomations(container) {
+    container.innerHTML = `
+      <div class="gos-section-card">
+        <div class="gos-section-card-header">
+          <span class="gos-section-card-title">🤖 Active System Automations</span>
+        </div>
+        <div class="gos-section-card-body">
+          <div style="font-size:13px; color:var(--text-secondary); margin-bottom:12px">
+            • <strong>CRM Client Onboarding:</strong> Moving leads to "Closed Won" automatically converts them to active clients and generates standard onboarding projects/checklists. (Active)
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Details Render Helpers ─────────────────────────────────
+  renderTaskDetail(r) {
+    const proj = (this.data.projects || []).find(p => p.projectId === r.projectId);
+    const client = (this.data.clients || []).find(c => c.clientId === r.clientId);
+    return `
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">Task Details</div>
+        ${this.renderField('Title', r.title)}
+        ${this.renderField('Status', this.renderBadge(r.status))}
+        ${this.renderField('Priority', this.renderBadge(r.priority))}
+        ${this.renderField('Due Date', this.renderDueDate(r.dueAt))}
+        ${this.renderField('Project', proj ? this._esc(proj.projectName) : '—')}
+        ${this.renderField('Client', client ? this._esc(client.clientName) : '—')}
+        ${this.renderField('Notes', r.notes || '—')}
+      </div>
+    `;
+  }
+
+  renderProjectDetail(r) {
+    const projectTasks = (this.data.tasks || []).filter(t => t.projectId === r.projectId);
+    const client = (this.data.clients || []).find(c => c.clientId === r.clientId);
+    return `
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">Project Details</div>
+        ${this.renderField('Project Name', r.projectName)}
+        ${this.renderField('Deadline', r.deadline || '—')}
+        ${this.renderField('Client', client ? this._esc(client.clientName) : '—')}
+        ${this.renderField('Budget', r.budget ? `₱${Number(r.budget).toLocaleString()}` : '—')}
+      </div>
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">Project Tasks (${projectTasks.length})</div>
+        <ul class="gos-task-list">
+          ${projectTasks.map(t => `
+            <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}" style="padding: 6px 0">
+              <span style="font-size:12px; font-weight:600">${this._esc(t.title)}</span>
+              ${this.renderBadge(t.status)}
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    `;
+  }
+
+  renderClientDetail(r) {
+    const clientProjects = (this.data.projects || []).filter(p => p.clientId === r.clientId);
+    return `
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">Client Details</div>
+        ${this.renderField('Client Name', r.clientName)}
+        ${this.renderField('Services', r.services || '—')}
+        ${this.renderField('End Date', r.endDate || '—')}
+        ${this.renderField('Account Value', r.accountValue ? `₱${Number(r.accountValue).toLocaleString()}` : '—')}
+      </div>
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">Active Projects (${clientProjects.length})</div>
+        <ul>
+          ${clientProjects.map(p => `
+            <li style="margin-bottom:6px; font-size:12px">
+              <strong>${this._esc(p.projectName)}</strong> — Due ${p.deadline || '—'}
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    `;
+  }
+
+  renderGoalDetail(r) {
+    return `
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">Goal Details</div>
+        ${this.renderField('Goal Name', r.goalName)}
+        ${this.renderField('Target Metric', r.targetMetric || '—')}
+        ${this.renderField('Current Metric', r.currentMetric || '—')}
+        ${this.renderField('Due Date', r.dueDate || '—')}
+      </div>
+    `;
+  }
+
+  renderNoteDetail(r) {
+    return `
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">Meeting Note</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:8px">Created: ${r.createdAt || '—'}</div>
+        <div style="font-size:13px; line-height:1.6; white-space:pre-wrap; background:var(--surface-hover); padding:12px; border-radius:var(--radius); border:1px solid var(--border)">${this._esc(r.content || '')}</div>
+      </div>
+    `;
+  }
+
+  renderSOPDetail(r) {
+    let steps = [];
+    try {
+      if (r.steps) {
+        steps = typeof r.steps === 'string' ? JSON.parse(r.steps) : r.steps;
+      }
+    } catch(e){
+      steps = (r.steps || '').split('\n').filter(Boolean);
+    }
+    return `
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">SOP Information</div>
+        ${this.renderField('Process Title', r.processTitle)}
+        ${this.renderField('Version', r.version || '1.0')}
+        ${this.renderField('Last Updated', r.lastUpdated || '—')}
+      </div>
+      <div class="gos-panel-section">
+        <div class="gos-panel-section-title">Procedure Steps</div>
+        <ol style="padding-left:16px; font-size:13px">
+          ${steps.map((s, i) => `<li style="margin-bottom:8px">${this._esc(s)}</li>`).join('')}
+        </ol>
+      </div>
+    `;
+  }
+
+  openTaskPanel(taskId) { this.openRecordPanel('tasks', taskId); }
+  openProjectPanel(projectId) { this.openRecordPanel('projects', projectId); }
+  openClientPanel(clientId) { this.openRecordPanel('clients', clientId); }
+  openNotePanel(noteId) { this.openRecordPanel('notes', noteId); }
+  openSopPanel(sopId) { this.openRecordPanel('sops', sopId); }
+  openGoalPanel(goalId) { this.openRecordPanel('goals', goalId); }
+
+  triggerLeadToClientConversion(lead) {
+    const exists = (this.data.clients || []).some(c => c.clientName === lead.contactName);
+    if (exists) return;
+
+    this.showConfirm(
+      '🎉 Closed Won: Onboard Client?',
+      `Convert lead "${lead.contactName}" into an active client? This will create a Client record, onboarding project, and standard onboarding checklist tasks.`,
+      '🤝 Convert & Onboard',
+      () => {
+        this.convertLeadToClient(lead);
+      }
+    );
+  }
+
+  convertLeadToClient(lead) {
+    const today = getDemoToday();
+    const clientId = `CL-${String((this.data.clients || []).length + 1).padStart(4, '0')}`;
+    const newClient = {
+      clientId,
+      clientName: lead.contactName,
+      services: lead.interestSignal || 'Services Onboarding',
+      endDate: '',
+      accountValue: parseFloat(lead.projectedCloseAmount) || 0,
+      createdAt: today,
+      updatedAt: today,
+    };
+    if (!this.data.clients) this.data.clients = [];
+    this.data.clients.push(newClient);
+
+    const projectId = `PRJ-${String((this.data.projects || []).length + 1).padStart(4, '0')}`;
+    const newProject = {
+      projectId,
+      projectName: `${lead.contactName} — Onboarding & Launch`,
+      deadline: '',
+      progress: 0,
+      budget: parseFloat(lead.projectedCloseAmount) || 0,
+      clientId: clientId,
+      createdAt: today,
+      updatedAt: today,
+    };
+    if (!this.data.projects) this.data.projects = [];
+    this.data.projects.push(newProject);
+
+    const onboardingTasks = [
+      'Conduct Kickoff Call',
+      'Receive & Verify Contract Signoff',
+      'Set Up Shared Folder & Workspace Assets',
+      'Initialize Lead Tracker Integration Mapping'
+    ];
+    if (!this.data.tasks) this.data.tasks = [];
+    onboardingTasks.forEach((taskTitle, idx) => {
+      const taskId = `T-${String((this.data.tasks || []).length + 1).padStart(4, '0')}`;
+      const newTask = {
+        taskId,
+        title: taskTitle,
+        status: 'To Do',
+        priority: idx === 0 ? 'High' : 'Normal',
+        dueAt: today,
+        createdAt: today,
+        projectId: projectId,
+        clientId: clientId,
+        notes: `Standard onboarding check item for ${lead.contactName}`
+      };
+      this.data.tasks.push(newTask);
+    });
+
+    this.showToast(`✅ Client "${lead.contactName}" onboarded! Project and tasks created.`, 'success');
+    this.render();
+
+    if (this.sheetsConnected) {
+      sheetsService.appendRecord('clients', newClient)
+        .then(() => sheetsService.appendRecord('projects', newProject))
+        .catch(err => console.error('Failed to write client/project to sheets:', err));
     }
   }
 }

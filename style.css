@@ -277,20 +277,53 @@ body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* Sidebar Nav */
+/* Sidebar Nav Grouping */
 .sidebar-nav {
   flex: 1;
   padding: 8px 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
-.nav-section-label {
-  font-size: 10px; font-weight: 600;
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 6px;
+}
+.nav-group-header {
+  font-size: 10px; font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 12px 16px 4px;
+  letter-spacing: 0.1em;
+  padding: 8px 16px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  transition: color var(--transition);
+}
+.nav-group-header:hover {
+  color: var(--text-secondary);
+}
+.nav-group-chevron {
+  font-size: 8px;
+  display: inline-block;
+  transition: transform var(--transition-fast);
+}
+.nav-group.collapsed .nav-group-items {
+  display: none;
+}
+.nav-group.collapsed .nav-group-chevron {
+  transform: rotate(-90deg);
+}
+.nav-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nav-group-items .gos-nav-item {
+  padding-left: 20px; /* indent nested items slightly for premium folder aesthetic */
 }
 .gos-nav-item {
   display: flex;
@@ -2381,11 +2414,13 @@ tr.row-overdue:hover td {
 .gos-sidebar.collapsed .nav-item-label,
 .gos-sidebar.collapsed .nav-item-badge,
 .gos-sidebar.collapsed .connection-indicator,
-.gos-sidebar.collapsed .sidebar-conn-actions {
+.gos-sidebar.collapsed .sidebar-conn-actions,
+.gos-sidebar.collapsed .nav-group-header {
   display: none !important;
 }
 
-.gos-sidebar.collapsed .gos-nav-item {
+.gos-sidebar.collapsed .nav-group-items .gos-nav-item {
+  padding-left: 0 !important;
   justify-content: center;
   padding: 12px 0;
 }
@@ -2643,3 +2678,267 @@ tr.row-overdue:hover td {
   cursor: not-allowed;
   border-color: var(--border) !important;
 }
+
+/* ── Upgraded Business OS Custom UI Components ────────────────── */
+
+/* Progress Bars */
+.progress-bar-container {
+  width: 100%;
+  height: 6px;
+  background: var(--surface-hover);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-top: 8px;
+  position: relative;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%);
+  border-radius: var(--radius-sm);
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Kanban Board Layout */
+.kanban-board {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding: 8px 4px 16px;
+  align-items: flex-start;
+  min-height: calc(100vh - 220px);
+}
+.kanban-column {
+  flex: 0 0 280px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 200px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+.kanban-column-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.kanban-column-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kanban-column-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface-hover);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.kanban-cards-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex-grow: 1;
+  min-height: 100px;
+}
+.kanban-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  cursor: grab;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+  user-select: none;
+}
+.kanban-card:hover {
+  border-color: var(--accent-light);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(139, 92, 246, 0.1);
+}
+.kanban-card:active {
+  cursor: grabbing;
+}
+.kanban-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.kanban-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+.kanban-card-project {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-muted);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+/* Habit Tracker Grid */
+.habits-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.habit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  gap: 16px;
+}
+.habit-info-col {
+  flex: 1;
+}
+.habit-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.habit-streak {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.habit-days-grid {
+  display: flex;
+  gap: 6px;
+}
+.habit-day-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.habit-day-btn.completed {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.habit-day-btn:hover {
+  border-color: var(--accent-light);
+  transform: scale(1.08);
+}
+
+/* Quick Capture Box */
+.quick-capture-container {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.quick-capture-input {
+  flex: 1;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  padding: 10px 14px;
+  font-size: 13px;
+  transition: border-color 0.2s;
+}
+.quick-capture-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.quick-capture-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0 16px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.quick-capture-btn:hover {
+  background: var(--accent-hover);
+}
+
+/* Daily Focus Widgets */
+.daily-focus-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.daily-focus-input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--border);
+  border-radius: 0;
+  color: var(--text-primary);
+  padding: 4px 0;
+  font-size: 13px;
+  transition: border-color 0.2s;
+}
+.daily-focus-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Generic OS card & list styling */
+.sop-grid, .notes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.sop-card, .note-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.sop-title, .note-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.sop-steps-count, .note-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.sop-step-item {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
+.sop-step-number {
+  font-weight: 700;
+  color: var(--accent);
+}
+

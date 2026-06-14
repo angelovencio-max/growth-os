@@ -66,8 +66,40 @@ function setupMasterSheet() {
       color: '#64748b',
     },
     'Tasks': {
-      headers: ['task_id', 'record_type', 'record_id', 'task_type', 'title', 'priority', 'due_at', 'assigned_to', 'status', 'completed_at', 'source', 'generated_by_rule_id', 'created_at', 'notes'],
+      headers: ['task_id', 'record_type', 'record_id', 'task_type', 'title', 'priority', 'start_date', 'due_at', 'completed_at', 'assigned_to', 'status', 'area_id', 'project_id', 'client_id', 'content_id', 'goal_id', 'estimated_time', 'actual_time', 'is_recurring', 'recurrence_pattern', 'subtasks', 'attachments', 'dependencies', 'my_day_pinned', 'created_at', 'notes'],
       color: '#64748b',
+    },
+    'Projects': {
+      headers: ['project_id', 'project_name', 'deadline', 'progress', 'budget', 'notes', 'created_at'],
+      color: '#8b5cf6',
+    },
+    'Clients': {
+      headers: ['client_id', 'client_name', 'services', 'end_date', 'account_value', 'notes', 'created_at'],
+      color: '#8b5cf6',
+    },
+    'Areas': {
+      headers: ['area_id', 'area_name', 'type'],
+      color: '#8b5cf6',
+    },
+    'Goals': {
+      headers: ['goal_id', 'goal_name', 'target_metric', 'current_metric', 'created_at'],
+      color: '#8b5cf6',
+    },
+    'Habits': {
+      headers: ['habit_id', 'habit_name', 'frequency', 'streak', 'history', 'created_at'],
+      color: '#8b5cf6',
+    },
+    'Learning': {
+      headers: ['learning_id', 'title', 'category', 'status', 'created_at'],
+      color: '#8b5cf6',
+    },
+    'Notes': {
+      headers: ['note_id', 'title', 'content', 'created_at'],
+      color: '#8b5cf6',
+    },
+    'SOPs': {
+      headers: ['sop_id', 'process_title', 'steps', 'version', 'last_updated'],
+      color: '#8b5cf6',
     },
     'Lists_Config': {
       headers: ['list_type', 'list_value', 'sort_order', 'active', 'rule_setting', 'rule_value', 'template_id', 'template_text', 'updated_at'],
@@ -138,7 +170,7 @@ function setupMasterSheet() {
 
   SpreadsheetApp.getUi().alert(
     '✅ Gelo Growth OS Setup Complete!\n\n' +
-    '• 14 tabs created with headers\n' +
+    '• 22 tabs created with headers\n' +
     '• Data validations added\n' +
     '• Lists_Config populated\n' +
     '• Dashboard formulas set\n' +
@@ -391,7 +423,8 @@ function protectIdColumns(ss) {
   const tabsWithIds = [
     'Contacts', 'Organizations', 'LinkedIn_Leads', 'Prime_Pipeline',
     'SCC_Content', 'Calmera_Orders', 'Reconfirmations', 'Source_Assets',
-    'Repurpose_Outputs', 'Interactions', 'Tasks'
+    'Repurpose_Outputs', 'Interactions', 'Tasks',
+    'Projects', 'Clients', 'Areas', 'Goals', 'Habits', 'Learning', 'Notes', 'SOPs'
   ];
   
   tabsWithIds.forEach(tabName => {
@@ -452,6 +485,14 @@ function generateIds() {
     { tab: 'Repurpose_Outputs', prefix: 'RO', col: 1 },
     { tab: 'Interactions', prefix: 'INT', col: 1 },
     { tab: 'Tasks', prefix: 'T', col: 1 },
+    { tab: 'Projects', prefix: 'PRJ', col: 1 },
+    { tab: 'Clients', prefix: 'CLI', col: 1 },
+    { tab: 'Areas', prefix: 'AREA', col: 1 },
+    { tab: 'Goals', prefix: 'G', col: 1 },
+    { tab: 'Habits', prefix: 'H', col: 1 },
+    { tab: 'Learning', prefix: 'L', col: 1 },
+    { tab: 'Notes', prefix: 'N', col: 1 },
+    { tab: 'SOPs', prefix: 'SOP', col: 1 },
   ];
   
   configs.forEach(({ tab, prefix, col }) => {
