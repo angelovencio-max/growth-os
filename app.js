@@ -6887,11 +6887,38 @@ class GeloGrowthOS {
   renderNoteDetail(r) {
     return `
       <div class="gos-panel-section">
-        <div class="gos-panel-section-title">Meeting Note</div>
-        <div style="font-size:12px; color:var(--text-muted); margin-bottom:8px">Created: ${r.createdAt || '—'}</div>
-        <div style="font-size:13px; line-height:1.6; white-space:pre-wrap; background:var(--surface-hover); padding:12px; border-radius:var(--radius); border:1px solid var(--border)">${this._esc(r.content || '')}</div>
+        <div class="gos-panel-section-title">Edit Note</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px">Created: ${r.createdAt || '—'}</div>
+        <div class="gos-form-group">
+          <label class="gos-form-label">Note Title</label>
+          <input class="gos-form-input" id="note-edit-title" value="${this._esc(r.title || '')}" oninput="app.updateNoteRecord('${r.noteId}', 'title', this.value)" style="margin-bottom:12px">
+        </div>
+        <div class="gos-form-group">
+          <label class="gos-form-label">Note Content</label>
+          <textarea class="gos-form-textarea" id="note-edit-content" rows="18" placeholder="Start typing notes..." oninput="app.updateNoteRecord('${r.noteId}', 'content', this.value)" style="font-size:13px; line-height:1.6; padding:12px">${this._esc(r.content || '')}</textarea>
+        </div>
       </div>
     `;
+  }
+
+  updateNoteRecord(noteId, field, value) {
+    const note = (this.data.notes || []).find(n => n.noteId === noteId);
+    if (note) {
+      note[field] = value;
+      this.saveLocalData();
+      
+      // Update background list UI if viewing notes
+      if (this.currentView === 'notes') {
+        const content = document.getElementById('main-content');
+        if (content) this.renderNotes(content);
+      }
+
+      // Sync to Google Sheets if connected
+      if (this.sheetsConnected && note._rowIndex !== undefined) {
+        sheetsService.updateRecord('notes', note._rowIndex, note)
+          .catch(err => console.error('Failed to sync note update to Sheets:', err));
+      }
+    }
   }
 
   renderSOPDetail(r) {
