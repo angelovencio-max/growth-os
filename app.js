@@ -70,9 +70,34 @@ class GeloGrowthOS {
     this._sidebarCollapsed = localStorage.getItem('gos_sidebar_collapsed') === 'true';
 
     // Init
-    this.loadData();
-    this.bindEvents();
-    this._initApp();
+    try {
+      this.loadData();
+      this.bindEvents();
+      this._initApp();
+    } catch (e) {
+      console.error('[GeloGrowthOS] Initialization failed:', e);
+      const content = document.getElementById('main-content');
+      if (content) {
+        content.className = 'gos-content';
+        content.innerHTML = `
+          <div style="padding:40px; text-align:center; max-width:500px; margin: 40px auto; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); box-shadow: var(--shadow-lg)">
+            <h3 style="color:var(--red); margin-bottom:12px; font-weight:700">⚠️ Initialization Error</h3>
+            <p style="font-size:13px; color:var(--text-secondary); line-height:1.6; margin-bottom:20px">
+              Growth OS failed to start. This is usually caused by outdated or incompatible cached settings in your browser's local storage.
+            </p>
+            <div style="display:flex; gap:12px; justify-content:center; margin-bottom:20px">
+              <button class="topbar-btn-primary" onclick="localStorage.clear(); location.reload();" style="background:var(--red); border-color:var(--red); cursor:pointer">
+                Clear Cache & Reload
+              </button>
+              <button class="topbar-btn-primary" onclick="location.reload();" style="background:var(--surface-hover); border:1px solid var(--border); color:var(--text-primary); cursor:pointer">
+                Retry Reload
+              </button>
+            </div>
+            <pre style="margin-top:20px; text-align:left; background:var(--surface-hover); padding:12px; border-radius:var(--radius-sm); font-size:11px; overflow-x:auto; color:var(--text-muted); border:1px solid var(--border)">${e.stack || e.message}</pre>
+          </div>
+        `;
+      }
+    }
   }
 
   // ── App Initialization ───────────────────────────────────────
@@ -3964,7 +3989,7 @@ class GeloGrowthOS {
     // 5. Tasks (Manual Events)
     tasks.forEach(t => {
       if (t.dueAt) {
-        const parts = t.dueAt.split(/[ T]/);
+        const parts = String(t.dueAt || '').split(/[ T]/);
         const date = parts[0] || '';
         let time = parts[1] || '09:00 AM';
         if (time && time.includes(':')) {
