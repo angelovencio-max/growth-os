@@ -708,6 +708,8 @@ class GeloGrowthOS {
     const upcomingTasks = tasks.filter(t => t.status !== 'Completed' && t.dueAt >= todayStr)
       .sort((a, b) => a.dueAt < b.dueAt ? -1 : 1).slice(0, 5);
 
+    const todayActionsList = leads.filter(l => l.nextActionDate && l.nextActionDate <= todayStr && !['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage));
+
     container.innerHTML = `
       ${this.renderHeroHeader()}
 
