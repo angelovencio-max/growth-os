@@ -68,6 +68,13 @@ class GeloGrowthOS {
     this._msgTone       = 'warm';
     this._currentMessage = null;
     this._sidebarCollapsed = localStorage.getItem('gos_sidebar_collapsed') === 'true';
+    this.notifications = JSON.parse(localStorage.getItem('gos_notifications_log') || '[]');
+    const storedCols = localStorage.getItem('gos_task_columns');
+    this.taskColumns = storedCols ? JSON.parse(storedCols) : ['To Do', 'In Progress', 'Waiting', 'Review', 'Completed'];
+    const hasSheets = typeof sheetsService !== 'undefined' && sheetsService.isConfigured();
+    const isSheetsConnected = localStorage.getItem('gos_sheets_connected') === 'true';
+    this.landingSyncState = (!hasSheets || isSheetsConnected) ? 'ready' : 'idle';
+    this.landingSyncError = null;
 
     // Init
     try {
@@ -120,8 +127,11 @@ class GeloGrowthOS {
     // Apply sidebar state
     this.applySidebarState();
 
-    // Render the first view
-    this.render();
+    // Determine initial view and render it according to URL routing
+    this.handleRouting();
+
+    // Render notifications UI
+    this.updateNotificationsUI();
   }
 
   // ── Sidebar Toggle Helpers ──────────────────────────────────
@@ -284,6 +294,23 @@ class GeloGrowthOS {
     this.filters = { status: 'all', priority: 'all', search: '' };
     this.sortConfig = { key: null, direction: 'asc' };
 
+    // Update URL path mapping to match router paths
+    const moduleToPath = {
+      today: '/app',
+      tasks: '/app/tasks',
+      projects: '/app/projects',
+      leads: '/app/crm',
+      content: '/app/content',
+      operations: '/app/operations',
+      goals: '/app/goals',
+    };
+    const path = moduleToPath[moduleId];
+    if (path && window.location.pathname !== path) {
+      window.history.pushState(null, '', path);
+    } else if (!path && !window.location.pathname.startsWith('/app')) {
+      window.history.pushState(null, '', '/app');
+    }
+
     // Update nav active states
     this._updateActiveNav(moduleId);
 
@@ -394,6 +421,216 @@ class GeloGrowthOS {
     }
   }
 
+  getFriendlyErrorMessage(err) {
+    const msg = err.message || String(err);
+    if (msg.includes("Failed to fetch") || msg.includes("Network request failed")) {
+      return "Network request failed. Check your internet connection or check if the Apps Script URL/CORS configuration is correct.";
+    }
+    if (msg.includes("HTTP 401") || msg.includes("401")) {
+      return "Google Sheets access was denied (HTTP 401). Check permissions.";
+    }
+    if (msg.includes("HTTP 403") || msg.includes("403")) {
+      return "Google Sheets access was denied (HTTP 403). Check Apps Script deployment settings.";
+    }
+    if (msg.includes("HTTP 404") || msg.includes("404")) {
+      return "Apps Script URL not found (HTTP 404). Check deployment URL.";
+    }
+    if (msg.includes("HTTP 500") || msg.includes("500")) {
+      return "The server returned HTTP 500. Apps Script execution failed — check Apps Script logs.";
+    }
+    // New descriptive "tab not found" error from updated sheet-api.gs
+    if (msg.includes("was not found in your spreadsheet and has no default configuration")) {
+      const match = msg.match(/Sheet tab "([^"]+)"/i);
+      const tab = match ? match[1] : "unknown";
+      return `Sheet tab "${tab}" was not found. Redeploy the latest sheet-api.gs as a Web App — it will auto-create all missing tabs.`;
+    }
+    if (msg.includes("has no default configuration")) {
+      const match = msg.match(/Tab "([^"]+)"/);
+      const tab = match ? match[1] : "unknown";
+      return `Sheet tab "${tab}" was not found in sheets-config default mappings. Redeploy the latest sheet-api.gs.`;
+    }
+    if (msg.toLowerCase().includes("not found") && (msg.toLowerCase().includes("tab") || msg.toLowerCase().includes("sheet"))) {
+      const match = msg.match(/Tab "([^"]+)"/i) || msg.match(/tab ([^\s]+)/i) || msg.match(/sheet "([^"]+)"/i) || msg.match(/sheet ([^\s]+)/i);
+      const tab = match ? match[1].replace(/\\/g, '').replace(/"/g, '').trim() : "requested";
+      return `Google Sheets tab "${tab}" was not found. Redeploy the latest sheet-api.gs as a Web App to enable auto-creation of missing tabs.`;
+    }
+    if (msg.includes("Column") && msg.includes("not found")) {
+      return msg;
+    }
+    return msg;
+  }
+
+  renderSyncBadgeInline(viewType, id, record) {
+    if (this.sheetsConnected && (record._syncStatus === 'Pending Sync' || record._syncStatus === 'Sync Failed')) {
+      return `<span class="gos-badge badge-pending-sync clickable" style="cursor:pointer; margin-left:6px; user-select:none;" onclick="event.stopPropagation(); app.retryRecordSync('${viewType}', '${id}')" title="Sync Pending. Click to retry.">⏳ Sync Pending</span>`;
+    }
+    return '';
+  }
+
+  async retryRecordSync(viewType, id) {
+    if (!this.sheetsConnected) {
+      this.showToast('⚠️ Cannot retry sync: Google Sheets is disconnected.', 'warning');
+      return;
+    }
+
+    const dataMap = {
+      'linkedin':   { data: this.data.linkedinLeads,    idKey: 'leadId',       tabKey: 'linkedinLeads' },
+      'prime':      { data: this.data.primePipeline,    idKey: 'opportunityId', tabKey: 'primePipeline' },
+      'scc':        { data: this.data.sccContent,       idKey: 'contentId',     tabKey: 'sccContent' },
+      'calmera':    { data: this.data.calmeraOrders,    idKey: 'orderId',       tabKey: 'calmeraOrders' },
+      'repurposing':{ data: this.data.repurposeOutputs, idKey: 'outputId',      tabKey: 'repurposeOutputs' },
+      'tasks':      { data: this.data.tasks,            idKey: 'taskId',        tabKey: 'tasks' },
+      'projects':   { data: this.data.projects,         idKey: 'projectId',     tabKey: 'projects' },
+      'clients':    { data: this.data.clients,          idKey: 'clientId',      tabKey: 'clients' },
+      'goals':      { data: this.data.goals,            idKey: 'goalId',        tabKey: 'goals' },
+      'habits':     { data: this.data.habits,           idKey: 'habitId',       tabKey: 'habits' },
+      'learning':   { data: this.data.learning,         idKey: 'learningId',    tabKey: 'learning' },
+      'notes':      { data: this.data.notes,            idKey: 'noteId',        tabKey: 'notes' },
+      'sops':       { data: this.data.sops,             idKey: 'sopId',         tabKey: 'sops' },
+    };
+
+    const config = dataMap[viewType];
+    if (!config) return;
+
+    const record = config.data.find(r => String(r[config.idKey]) === String(id));
+    if (!record) return;
+
+    this.showToast('🔄 Retrying sync...', 'info');
+    this.updateTopbarSyncStatus('syncing');
+
+    record._syncStatus = 'Syncing';
+    this.render(); // update badges
+    if (this.selectedRecord && this.selectedRecord.record[config.idKey] === id) {
+      this.openRecordPanel(viewType, id);
+    }
+
+    try {
+      // Relational self-repair/sync contacts and orgs first if applicable
+      if (viewType === 'linkedin' || viewType === 'prime') {
+        const contact = (this.data.contacts || []).find(c => c.fullName === record.contactName || c.contactId === record.contactId);
+        if (contact) {
+          if (contact._rowIndex === undefined) {
+            const res = await sheetsService.appendRecord('contacts', contact);
+            if (res && res.rowsAfter !== undefined) contact._rowIndex = res.rowsAfter - 1;
+          } else {
+            await sheetsService.updateRecord('contacts', contact._rowIndex, contact);
+          }
+        }
+        const org = (this.data.organizations || []).find(o => o.organizationName === record.company || o.organizationId === record.organizationId);
+        if (org) {
+          if (org._rowIndex === undefined) {
+            const res = await sheetsService.appendRecord('organizations', org);
+            if (res && res.rowsAfter !== undefined) org._rowIndex = res.rowsAfter - 1;
+          } else {
+            await sheetsService.updateRecord('organizations', org._rowIndex, org);
+          }
+        }
+      }
+
+      // Send record
+      if (record._rowIndex !== undefined) {
+        await sheetsService.updateRecord(config.tabKey, record._rowIndex, record);
+      } else {
+        const res = await sheetsService.appendRecord(config.tabKey, record);
+        if (res && res.rowsAfter !== undefined) {
+          record._rowIndex = res.rowsAfter - 1;
+        }
+      }
+
+      delete record._syncStatus;
+      delete record._syncError;
+      this.saveLocalData();
+      this.updateTopbarSyncStatus('synced');
+      this.showToast('✅ Sync successful!', 'success');
+    } catch (err) {
+      console.error('Retry sync failed:', err);
+      const userError = this.getFriendlyErrorMessage(err);
+      record._syncStatus = 'Sync Failed';
+      record._syncError = userError;
+      this.saveLocalData();
+      this.updateTopbarSyncStatus('error');
+      this.showToast(`⚠️ Sync failed: ${userError}`, 'error');
+    }
+
+    this.render();
+    if (this.selectedRecord && this.selectedRecord.record[config.idKey] === id) {
+      this.openRecordPanel(viewType, id);
+    }
+  }
+
+  mergeLocalPendingRecords(key, loadedRows) {
+    const localRows = this.data[key] || [];
+    const idKeyMap = {
+      contacts: 'contactId',
+      organizations: 'organizationId',
+      linkedinLeads: 'leadId',
+      primePipeline: 'opportunityId',
+      sccContent: 'contentId',
+      calmeraOrders: 'orderId',
+      repurposeOutputs: 'outputId',
+      interactions: 'interactionId',
+      tasks: 'taskId',
+      projects: 'projectId',
+      clients: 'clientId',
+      goals: 'goalId',
+      habits: 'habitId',
+      learning: 'learningId',
+      notes: 'noteId',
+      sops: 'sopId',
+    };
+    const idKey = idKeyMap[key];
+    if (!idKey) return loadedRows;
+
+    const loadedByRowIndex = {};
+    loadedRows.forEach(row => {
+      if (row._rowIndex !== undefined) {
+        loadedByRowIndex[row._rowIndex] = row;
+      }
+    });
+
+    const merged = [];
+    const processedRowIndices = new Set();
+    const localPendingOrUnsynced = localRows.filter(r => r._syncStatus === 'Pending Sync' || r._syncStatus === 'Sync Failed' || r._rowIndex === undefined);
+
+    const localPendingByRowIndex = {};
+    const localPendingById = {};
+    localPendingOrUnsynced.forEach(r => {
+      if (r._rowIndex !== undefined) {
+        localPendingByRowIndex[r._rowIndex] = r;
+      }
+      if (r[idKey]) {
+        localPendingById[r[idKey]] = r;
+      }
+    });
+
+    loadedRows.forEach(row => {
+      const idx = row._rowIndex;
+      const id = row[idKey];
+      let rowToUse = row;
+
+      if (idx !== undefined && localPendingByRowIndex[idx]) {
+        rowToUse = localPendingByRowIndex[idx];
+        processedRowIndices.add(idx);
+      } else if (id && localPendingById[id]) {
+        rowToUse = localPendingById[id];
+        if (rowToUse._rowIndex !== undefined) {
+          processedRowIndices.add(rowToUse._rowIndex);
+        }
+      }
+      merged.push(rowToUse);
+    });
+
+    localPendingOrUnsynced.forEach(r => {
+      const alreadyProcessed = (r._rowIndex !== undefined && processedRowIndices.has(r._rowIndex)) || 
+                               (r[idKey] && merged.some(m => m[idKey] === r[idKey]));
+      if (!alreadyProcessed) {
+        merged.push(r);
+      }
+    });
+
+    return merged;
+  }
+
   loadLocalDataFallback() {
     const localRaw = localStorage.getItem('gos_local_database');
     if (localRaw) {
@@ -439,6 +676,22 @@ class GeloGrowthOS {
         this.closeMoreDrawer();
       }
     });
+
+    // History API popstate handler
+    window.addEventListener('popstate', () => {
+      this.handleRouting();
+    });
+
+    // Click outside handler for landing page profile dropdown
+    document.addEventListener('click', (e) => {
+      const dropdown = document.getElementById('landing-account-dropdown');
+      if (dropdown && dropdown.classList.contains('show')) {
+        const area = document.getElementById('landing-account-area');
+        if (area && !area.contains(e.target)) {
+          dropdown.classList.remove('show');
+        }
+      }
+    });
   }
 
   // ── View Switching (legacy support — use navigateTo() for new code) ─
@@ -459,10 +712,10 @@ class GeloGrowthOS {
 
     switch (this.currentView) {
       case 'linkedin':
-        Object.assign(options, { 'New': 'New', 'Qualified': 'Qualified', 'Contacted': 'Contacted', 'Nurturing': 'Nurturing', 'Converted': 'Converted', 'Recycle': 'Recycle', 'Closed': 'Closed' });
+        Object.assign(options, { 'New': 'New', 'Qualified': 'Qualified', 'Contacted': 'Contacted', 'Nurturing': 'Nurturing', 'Closed': 'Closed', 'Recycle': 'Recycle' });
         break;
       case 'prime':
-        Object.assign(options, { 'New Inquiry': 'New Inquiry', 'Qualified': 'Qualified', 'Discovery': 'Discovery', 'Proposal Sent': 'Proposal Sent', 'Negotiation': 'Negotiation', 'Won': 'Won', 'Lost': 'Lost', 'Handoff': 'Handoff' });
+        Object.assign(options, { 'New Inquiry': 'New Inquiry', 'Qualified': 'Qualified', 'Discovery': 'Discovery', 'Proposal Sent': 'Proposal Sent', 'Negotiation': 'Negotiation', 'Won': 'Won', 'Lost': 'Lost', 'Handoff': 'Handoff', 'Closed': 'Closed' });
         break;
       case 'scc':
         Object.assign(options, { 'Idea': 'Idea', 'Planned': 'Planned', 'Draft': 'Draft', 'Review': 'Review', 'Scheduled': 'Scheduled', 'Published': 'Published', 'Archived': 'Archived' });
@@ -588,12 +841,21 @@ class GeloGrowthOS {
   }
 
   renderContent() {
+    if (this.currentView === 'landing') {
+      const publicShell = document.getElementById('public-homepage-shell');
+      if (publicShell) {
+        this.renderLandingPage(publicShell);
+      }
+      return;
+    }
+
     const content = document.getElementById('main-content');
     if (!content) return;
 
     content.className = 'gos-content animate-fade-in';
 
     switch (this.currentView) {
+      case 'today':             // fall-through — sidebar uses 'today' module
       case 'command-center':    this.renderToday(content); break;
       case 'my-day':            this.renderMyDay(content); break;
       case 'inbox':             this.renderInbox(content); break;
@@ -684,36 +946,58 @@ class GeloGrowthOS {
   // ── Legacy Command Center (kept for compatibility) ───────────
   renderCommandCenter(container) {
     const todayStr = getDemoToday();
-    const leads = this.data.linkedinLeads || [];
-    const pipeline = this.data.primePipeline || [];
-    const tasks = this.data.tasks || [];
+    const tasks    = this.data.tasks || [];
     const projects = this.data.projects || [];
-    
-    // Calculations
-    const tasksToday = tasks.filter(t => t.dueAt === todayStr);
-    const completedTasksToday = tasksToday.filter(t => t.status === 'Completed').length;
-    
-    const overdueTasks = tasks.filter(t => t.dueAt && t.dueAt < todayStr && t.status !== 'Completed');
-    const followUpsToday = leads.filter(l => l.nextActionDate === todayStr && !['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage)).length;
-    const activeProjects = projects.filter(p => p.progress !== 100);
+    const leads    = this.data.linkedinLeads || [];
+    const goals    = this.data.goals || [];
 
-    // Load focus slots
-    let dailyFocus = ['','',''];
+    // ── KPI Calculations ──────────────────────────────────────
+    // Tasks Today: any task due today (regardless of source)
+    const tasksToday = tasks.filter(t => t.dueAt === todayStr);
+    const completedStatus = this.taskColumns[this.taskColumns.length - 1] || 'Completed';
+    const completedTasksToday = tasksToday.filter(t => this.isTaskCompleted(t)).length;
+
+    // Overdue Tasks: ALL tasks past due and not completed
+    const overdueTasks = tasks.filter(t =>
+      t.dueAt && t.dueAt < todayStr && !this.isTaskCompleted(t) && t.status !== 'Cancelled'
+    );
+
+    // Follow-ups Today: leads whose nextActionDate <= today (also include overdue follow-ups)
+    const activeStages = ['Closed Won', 'Closed Lost', 'Not Fit', 'Closed', 'Recycle'];
+    const followUpsToday = leads.filter(l =>
+      l.nextActionDate && l.nextActionDate <= todayStr &&
+      !activeStages.includes(l.stage)
+    ).length;
+
+    // Active Projects: not 100% complete
+    const activeProjects = projects.filter(p => (p.progress || 0) < 100);
+
+    // ── Load Saved Focus ─────────────────────────────────────
+    let dailyFocus = ['', '', ''];
     try {
       const saved = localStorage.getItem('gos_daily_focus');
       if (saved) dailyFocus = JSON.parse(saved);
-    } catch(e){}
+    } catch (e) {}
 
-    // Upcoming deadlines
-    const upcomingTasks = tasks.filter(t => t.status !== 'Completed' && t.dueAt >= todayStr)
-      .sort((a, b) => a.dueAt < b.dueAt ? -1 : 1).slice(0, 5);
+    // ── Upcoming Tasks (next 7 items not completed) ───────────
+    const upcomingTasks = tasks
+      .filter(t => !['Completed', 'Done', 'Cancelled'].includes(t.status) && t.dueAt)
+      .sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))
+      .slice(0, 7);
 
-    const todayActionsList = leads.filter(l => l.nextActionDate && l.nextActionDate <= todayStr && !['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage));
+    // ── Today's Outreach list ─────────────────────────────────
+    const todayActionsList = leads.filter(l =>
+      l.nextActionDate && l.nextActionDate <= todayStr &&
+      !activeStages.includes(l.stage)
+    );
+
+    // ── Goal Progress ─────────────────────────────────────────
+    const activeGoals = goals.filter(g => g.goalName).slice(0, 4);
 
     container.innerHTML = `
       ${this.renderHeroHeader()}
 
-      <!-- Priority Cards Grid -->
+      <!-- KPI Cards -->
       <div class="gos-kpi-grid">
         <div class="gos-kpi-card" onclick="app.navigateTo('tasks')">
           <div class="gos-kpi-header">
@@ -724,10 +1008,10 @@ class GeloGrowthOS {
             <div class="gos-kpi-value">${completedTasksToday}/${tasksToday.length}</div>
             <div class="gos-kpi-arrow">→</div>
           </div>
-          <div class="gos-kpi-detail">Completed tasks vs total due today</div>
+          <div class="gos-kpi-detail">Completed vs total due today</div>
         </div>
 
-        <div class="gos-kpi-card" onclick="app.navigateTo('tasks')">
+        <div class="gos-kpi-card${overdueTasks.length > 0 ? ' red' : ''}" onclick="app.navigateTo('tasks')">
           <div class="gos-kpi-header">
             <span class="gos-kpi-label">Overdue Tasks</span>
             <span class="gos-kpi-icon">${getIconSvg('alert', 18)}</span>
@@ -736,19 +1020,19 @@ class GeloGrowthOS {
             <div class="gos-kpi-value">${overdueTasks.length}</div>
             <div class="gos-kpi-arrow">→</div>
           </div>
-          <div class="gos-kpi-detail">Tasks with past due dates</div>
+          <div class="gos-kpi-detail">${overdueTasks.length > 0 ? 'Needs immediate attention' : 'All tasks on track'}</div>
         </div>
 
-        <div class="gos-kpi-card" onclick="app.navigateTo('leads')">
+        <div class="gos-kpi-card${followUpsToday > 0 ? ' amber' : ''}" onclick="app.navigateTo('leads')">
           <div class="gos-kpi-header">
-            <span class="gos-kpi-label">Follow-ups Today</span>
+            <span class="gos-kpi-label">Follow-ups Due</span>
             <span class="gos-kpi-icon">${getIconSvg('user', 18)}</span>
           </div>
           <div class="gos-kpi-value-wrapper">
             <div class="gos-kpi-value">${followUpsToday}</div>
             <div class="gos-kpi-arrow">→</div>
           </div>
-          <div class="gos-kpi-detail">Outreach scheduling due today</div>
+          <div class="gos-kpi-detail">${followUpsToday > 0 ? 'Outreach due today or overdue' : 'No follow-ups due'}</div>
         </div>
 
         <div class="gos-kpi-card" onclick="app.navigateTo('projects')">
@@ -764,13 +1048,13 @@ class GeloGrowthOS {
         </div>
       </div>
 
-      <!-- Main Dashboard Grid -->
+      <!-- Main Grid -->
       <div class="gos-section-grid">
-        
-        <!-- Left Column: Priorities & Projects -->
+
+        <!-- Left Column -->
         <div style="display:flex; flex-direction:column; gap:16px">
-          
-          <!-- Card 1: Daily Focus Priorities -->
+
+          <!-- Daily Focus -->
           <div class="gos-section-card">
             <div class="gos-section-card-header">
               <span class="gos-section-card-title">🎯 Daily Focus Priorities</span>
@@ -784,29 +1068,31 @@ class GeloGrowthOS {
             </div>
           </div>
 
-          <!-- Card 2: Active Projects -->
+          <!-- Active Projects -->
           <div class="gos-section-card">
             <div class="gos-section-card-header">
               <span class="gos-section-card-title">📁 Active Projects</span>
+              <button class="btn-ghost btn-sm" onclick="app.navigateTo('projects')" style="font-size:11px">View all →</button>
             </div>
             <div class="gos-section-card-body" style="padding:16px">
-              ${projects.length === 0 ? `
+              ${activeProjects.length === 0 ? `
                 <div class="gos-empty" style="padding:20px 0">
                   <span class="gos-empty-desc">No active projects.</span>
                 </div>
-              ` : projects.slice(0, 3).map(p => {
+              ` : activeProjects.slice(0, 4).map(p => {
                 const linkedTasks = tasks.filter(t => t.projectId === p.projectId);
-                const completed = linkedTasks.filter(t => t.status === 'Completed').length;
-                const progress = linkedTasks.length ? Math.round((completed / linkedTasks.length) * 100) : 0;
+                const completed = linkedTasks.filter(t => this.isTaskCompleted(t)).length;
+                const progress = linkedTasks.length ? Math.round((completed / linkedTasks.length) * 100) : (p.progress || 0);
                 return `
-                  <div style="margin-bottom:12px; cursor:pointer" onclick="app.navigateTo('projects')">
-                    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px">
-                      <strong>${this._esc(p.projectName)}</strong>
-                      <span>${progress}%</span>
+                  <div style="margin-bottom:14px; cursor:pointer" onclick="app.navigateTo('projects')">
+                    <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:5px">
+                      <strong style="color:var(--text-primary)">${this._esc(p.projectName)}</strong>
+                      <span style="color:var(--text-muted); font-weight:600">${progress}%</span>
                     </div>
                     <div class="progress-bar-container">
                       <div class="progress-bar-fill" style="width: ${progress}%"></div>
                     </div>
+                    ${p.deadline ? `<div style="font-size:11px; color:var(--text-muted); margin-top:4px">Due ${this.formatDateTime(p.deadline, p.deadlineTime)}</div>` : ''}
                   </div>
                 `;
               }).join('')}
@@ -815,162 +1101,226 @@ class GeloGrowthOS {
 
         </div>
 
-        <!-- Right Column: Quick Capture & Agenda -->
+        <!-- Right Column -->
         <div style="display:flex; flex-direction:column; gap:16px">
-          
-          <!-- Card 3: Quick Capture Inbox -->
+
+          <!-- Goal Progress -->
           <div class="gos-section-card">
             <div class="gos-section-card-header">
-              <span class="gos-section-card-title">📥 Quick Capture Inbox</span>
+              <span class="gos-section-card-title">🏆 Goal Progress</span>
+              <button class="btn-ghost btn-sm" onclick="app.navigateTo('goals')" style="font-size:11px">View all →</button>
             </div>
             <div class="gos-section-card-body" style="padding:16px">
-              <div class="quick-capture-container" style="margin-bottom:0">
-                <input class="quick-capture-input" id="dashboard-quick-capture" placeholder="Capture idea or task instantly..." onkeydown="if(event.key==='Enter') app.quickCaptureDashboard()">
-                <button class="quick-capture-btn" onclick="app.quickCaptureDashboard()">Capture</button>
-              </div>
+              ${activeGoals.length === 0 ? `
+                <div class="gos-empty" style="padding:16px 0">
+                  <span class="gos-empty-desc">No goals set yet.</span>
+                  <button class="btn-primary btn-sm" style="margin-top:8px" onclick="app.openQuickAdd('goals', event)">+ Add Goal</button>
+                </div>
+              ` : activeGoals.map(g => {
+                const current = parseFloat(g.currentMetric) || 0;
+                const target  = parseFloat(g.targetMetric)  || 1;
+                const pct     = Math.min(Math.round((current / target) * 100), 100);
+                const color   = pct >= 100 ? 'var(--green)' : pct >= 60 ? 'var(--accent)' : pct >= 30 ? 'var(--amber)' : 'var(--red)';
+                return `
+                  <div style="margin-bottom:14px; cursor:pointer" onclick="app.navigateTo('goals')">
+                    <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:5px">
+                      <strong style="color:var(--text-primary)">${this._esc(g.goalName)}</strong>
+                      <span style="font-weight:700; color:${color}">${pct}%</span>
+                    </div>
+                    <div class="progress-bar-container">
+                      <div class="progress-bar-fill" style="width:${pct}%; background:${color}"></div>
+                    </div>
+                    <div style="font-size:11px; color:var(--text-muted); margin-top:4px">
+                      ${current.toLocaleString()} / ${target.toLocaleString()}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
             </div>
           </div>
 
-          <!-- Card 4: Upcoming Agenda -->
+          <!-- Upcoming Agenda -->
           <div class="gos-section-card">
             <div class="gos-section-card-header">
               <span class="gos-section-card-title">⏳ Upcoming Agenda</span>
+              <button class="btn-ghost btn-sm" onclick="app.navigateTo('tasks')" style="font-size:11px">View all →</button>
             </div>
-            <div class="gos-section-card-body" style="padding:16px">
+            <div class="gos-section-card-body" style="padding:8px 16px 16px">
               ${upcomingTasks.length === 0 ? `
                 <div class="gos-empty" style="padding:20px 0">
-                  <span class="gos-empty-desc">All caught up!</span>
+                  <span class="gos-empty-desc">All caught up! No upcoming tasks.</span>
                 </div>
               ` : `
                 <ul class="gos-task-list" style="margin:0; padding:0; list-style:none">
-                  ${upcomingTasks.map(t => `
-                    <li class="gos-task-item" onclick="app.openTaskPanel('${t.taskId}')" style="cursor:pointer">
-                      <div class="gos-task-info">
-                        <span class="gos-task-title">${this._esc(t.title)}</span>
-                        <div class="gos-task-meta">Due ${t.dueAt} · ${this.renderBadge(t.priority)}</div>
-                      </div>
-                    </li>
-                  `).join('')}
+                  ${upcomingTasks.map(t => {
+                    const days = daysUntil(t.dueAt);
+                    const isOvd = days < 0;
+                    const isToday = days === 0;
+                    const dueCls = isOvd ? 'overdue' : isToday ? 'due-today' : days <= 3 ? 'due-soon' : 'due-later';
+                    const dueIcon = isOvd ? '🔴' : isToday ? '🔵' : '⏳';
+                    const dueLabel = isOvd ? `${Math.abs(days)}d overdue` : isToday ? 'Today' : `${days}d`;
+                    return `
+                      <li style="display:flex; align-items:flex-start; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); cursor:pointer" onclick="app.openTaskPanel('${t.taskId}')">
+                        <div class="gos-task-check ${this.isTaskCompleted(t) ? 'checked' : ''}" onclick="event.stopPropagation(); app.toggleTask('${t.taskId}')" style="flex-shrink:0; margin-top:2px"></div>
+                        <div style="flex:1; min-width:0">
+                          <div style="font-size:13px; font-weight:500; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${this._esc(t.title)}</div>
+                          <div style="font-size:11px; color:var(--text-muted); margin-top:2px; display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+                            <span class="gos-due ${dueCls}">${dueIcon} ${dueLabel}${t.dueTime ? ' @ ' + this.formatTime(t.dueTime) : ''}</span>
+                            ${t.priority ? this.renderBadge(t.priority) : ''}
+                          </div>
+                        </div>
+                      </li>
+                    `;
+                  }).join('')}
                 </ul>
               `}
             </div>
           </div>
 
         </div>
+      </div>
 
-      </div> <!-- End of gos-section-grid -->
-
-      <!-- Card 5: Outreach / Follow-ups Today -->
+      <!-- Outreach / Follow-ups Today -->
       <div class="gos-section-card" style="margin-top:20px">
         <div class="gos-section-card-header">
           <span class="gos-section-card-title">🤝 Outreach / Follow-ups Today</span>
+          <button class="btn-ghost btn-sm" onclick="app.navigateTo('leads')" style="font-size:11px">View all →</button>
         </div>
         <div class="gos-section-card-body" style="padding:0">
-            ${todayActionsList.length === 0 ? `
-              <div class="gos-empty" style="padding:50px 20px">
-                <span class="gos-empty-icon">🎉</span>
-                <span class="gos-empty-title">All actions completed!</span>
-                <span class="gos-empty-desc">No follow-ups due today. Keep up the amazing work!</span>
-              </div>
-            ` : `
-              <!-- Desktop Table View -->
-              <div class="gos-table-responsive hide-on-mobile">
-                <table class="gos-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Company</th>
-                      <th>Stage</th>
-                      <th>Source</th>
-                      <th>Next Action</th>
-                      <th>Follow-up Date</th>
-                      <th class="cell-right">Amount</th>
-                      <th class="cell-right" style="min-width: 160px">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${todayActionsList.map(l => {
-                      const isOverdueVal = l.nextActionDate && l.nextActionDate < todayStr;
-                      return `
-                        <tr>
-                          <td class="cell-name clickable" onclick="app.openRecordPanel('linkedin', '${l.leadId}')">
-                            <div class="name-block">
-                              <span class="name-text">${l.contactName || 'Unknown Contact'}</span>
-                            </div>
-                          </td>
-                          <td>${l.company || '—'}</td>
-                          <td>${this.renderBadge(l.stage)}</td>
-                          <td>
-                            <span class="gos-badge badge-purple" style="font-size:11px">${l.source || 'LinkedIn'}</span>
-                          </td>
-                          <td><span class="action-summary">${l.nextAction || 'Follow up'}</span></td>
-                          <td>
-                            ${l.nextActionDate ? `
-                              <span class="date-badge ${isOverdueVal ? 'overdue animate-pulse' : 'today'}">
-                                ${isOverdueVal ? '⚠️ ' : ''}${l.nextActionDate}
-                              </span>
-                            ` : '—'}
-                          </td>
-                          <td class="cell-right font-semibold">₱${(l.projectedCloseAmount || 0).toLocaleString()}</td>
-                          <td class="cell-right">
-                            <div class="gos-row-actions">
-                              <button class="gos-btn btn-sm btn-ghost" onclick="event.stopPropagation(); app.openMessageForRecord('linkedin', '${l.leadId}')" title="Generate customized message">💬 Msg</button>
-                              <button class="gos-btn btn-sm btn-ghost" onclick="event.stopPropagation(); app.copyMessageDirectly('linkedin', '${l.leadId}')" title="Copy default follow-up directly">📋 Copy</button>
-                              <button class="gos-btn btn-sm btn-primary" onclick="event.stopPropagation(); app.markEventCompleted('linkedin', '${l.leadId}')" title="Mark action completed">✓ Done</button>
-                              <button class="gos-btn btn-sm btn-secondary" onclick="event.stopPropagation(); app.openRecordPanel('linkedin', '${l.leadId}')" title="View details panel">⋯ More</button>
-                            </div>
-                          </td>
-                        </tr>
-                      `;
-                    }).join('')}
-                  </tbody>
-                </table>
-              </div>
-
-              <!-- Mobile Stacked Card View (viewport < 768px) -->
-              <div class="mobile-only-cards show-on-mobile" style="display:none">
-                <div class="mobile-actions-grid" style="display:flex; flex-direction:column; gap:12px; padding:16px;">
+          ${todayActionsList.length === 0 ? `
+            <div class="gos-empty" style="padding:50px 20px">
+              <span class="gos-empty-icon">🎉</span>
+              <span class="gos-empty-title">All actions completed!</span>
+              <span class="gos-empty-desc">No follow-ups due today. Keep up the amazing work!</span>
+            </div>
+          ` : `
+            <!-- Desktop Table View -->
+            <div class="gos-table-responsive hide-on-mobile">
+              <table class="gos-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Company</th>
+                    <th>Stage</th>
+                    <th>Source</th>
+                    <th>Next Action</th>
+                    <th>Follow-up Date</th>
+                    <th class="cell-right">Amount</th>
+                    <th class="cell-right" style="min-width: 160px">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
                   ${todayActionsList.map(l => {
                     const isOverdueVal = l.nextActionDate && l.nextActionDate < todayStr;
                     return `
-                      <div class="action-card" onclick="app.openRecordPanel('linkedin', '${l.leadId}')">
-                        <div class="action-card-top">
-                          <div>
-                            <div class="action-card-name">${l.contactName || 'Unknown Contact'}</div>
-                            <div class="action-card-offer">${l.company || 'Brand: —'}</div>
+                      <tr>
+                        <td class="cell-name clickable" onclick="app.openRecordPanel('linkedin', '${l.leadId}')">
+                          <div class="name-block">
+                            <span class="name-text">${l.contactName || 'Unknown Contact'}</span>
                           </div>
-                          <div class="action-card-score" style="font-weight:600; color:var(--text-primary)">
-                            ₱${(l.projectedCloseAmount || 0).toLocaleString()}
-                          </div>
-                        </div>
-                        <div class="action-card-next">
-                          <strong>Next:</strong> ${l.nextAction || 'Follow up with lead'}
-                        </div>
-                        <div style="margin-top:6px; font-size:11px; display:flex; gap:6px; align-items:center;">
+                        </td>
+                        <td>${l.company || '—'}</td>
+                        <td>${this.renderBadge(l.stage)}</td>
+                        <td>
+                          <span class="gos-badge badge-purple" style="font-size:11px">${l.source || 'LinkedIn'}</span>
+                        </td>
+                        <td><span class="action-summary">${l.nextAction || 'Follow up'}</span></td>
+                        <td>
                           ${l.nextActionDate ? `
                             <span class="date-badge ${isOverdueVal ? 'overdue animate-pulse' : 'today'}">
-                              ${isOverdueVal ? '⚠️ OVERDUE: ' : 'DUE: '}${l.nextActionDate}
+                              ${isOverdueVal ? '⚠️ ' : ''}${this.formatDateTime(l.nextActionDate, l.followUpTime)}
                             </span>
-                          ` : ''}
-                          <span>${this.renderBadge(l.stage)}</span>
-                          <span class="gos-badge badge-purple" style="font-size:10px">${l.source || 'LinkedIn'}</span>
-                        </div>
-                        <div class="action-card-actions">
-                          <button class="gos-btn btn-sm btn-ghost" onclick="event.stopPropagation(); app.openMessageForRecord('linkedin', '${l.leadId}')" style="flex:1; min-height:44px;">💬 Msg</button>
-                          <button class="gos-btn btn-sm btn-ghost" onclick="event.stopPropagation(); app.copyMessageDirectly('linkedin', '${l.leadId}')" style="flex:1; min-height:44px;">📋 Copy</button>
-                          <button class="gos-btn btn-sm btn-primary" onclick="event.stopPropagation(); app.markEventCompleted('linkedin', '${l.leadId}')" style="flex:1; min-height:44px;">✓ Done</button>
-                        </div>
-                      </div>
+                          ` : '—'}
+                        </td>
+                        <td class="cell-right font-semibold">₱${(l.projectedCloseAmount || 0).toLocaleString()}</td>
+                        <td class="cell-right">
+                          <div class="gos-row-actions">
+                            <button class="gos-btn btn-sm btn-ghost" onclick="event.stopPropagation(); app.openMessageForRecord('linkedin', '${l.leadId}')" title="Generate message">💬 Msg</button>
+                            <button class="gos-btn btn-sm btn-ghost" onclick="event.stopPropagation(); app.copyMessageDirectly('linkedin', '${l.leadId}')" title="Copy follow-up">📋 Copy</button>
+                            <button class="gos-btn btn-sm btn-primary" onclick="event.stopPropagation(); app.markEventCompleted('linkedin', '${l.leadId}')" title="Mark done">✓ Done</button>
+                            <button class="gos-btn btn-sm btn-secondary" onclick="event.stopPropagation(); app.openRecordPanel('linkedin', '${l.leadId}')" title="View more">⋯ More</button>
+                          </div>
+                        </td>
+                      </tr>
                     `;
                   }).join('')}
-                </div>
-              </div>
-            `}
-          </div>
-        </div>
+                </tbody>
+              </table>
+            </div>
 
+            <!-- Mobile Card View -->
+            <div class="mobile-only-cards show-on-mobile" style="display:none">
+              <div class="mobile-actions-grid" style="display:flex; flex-direction:column; gap:12px; padding:16px;">
+                ${todayActionsList.map(l => {
+                  const isOverdueVal = l.nextActionDate && l.nextActionDate < todayStr;
+                  return `
+                    <div class="action-card" onclick="app.openRecordPanel('linkedin', '${l.leadId}')">
+                      <div class="action-card-top">
+                        <div>
+                          <div class="action-card-name">${l.contactName || 'Unknown Contact'}</div>
+                          <div class="action-card-offer">${l.company || 'Brand: —'}</div>
+                        </div>
+                        <div class="action-card-score" style="font-weight:600; color:var(--text-primary)">
+                          ₱${(l.projectedCloseAmount || 0).toLocaleString()}
+                        </div>
+                      </div>
+                      <div class="action-card-next">
+                        <strong>Next:</strong> ${l.nextAction || 'Follow up with lead'}
+                      </div>
+                      <div style="margin-top:6px; font-size:11px; display:flex; gap:6px; align-items:center; flex-wrap:wrap">
+                        ${l.nextActionDate ? `
+                          <span class="date-badge ${isOverdueVal ? 'overdue animate-pulse' : 'today'}">
+                            ${isOverdueVal ? '⚠️ OVERDUE: ' : 'DUE: '}${l.nextActionDate}
+                          </span>
+                        ` : ''}
+                        <span>${this.renderBadge(l.stage)}</span>
+                        <span class="gos-badge badge-purple" style="font-size:10px">${l.source || 'LinkedIn'}</span>
+                      </div>
+                      <div class="action-card-actions">
+                        <button class="gos-btn btn-sm btn-ghost" onclick="event.stopPropagation(); app.openMessageForRecord('linkedin', '${l.leadId}')" style="flex:1; min-height:44px;">💬 Msg</button>
+                        <button class="gos-btn btn-sm btn-ghost" onclick="event.stopPropagation(); app.copyMessageDirectly('linkedin', '${l.leadId}')" style="flex:1; min-height:44px;">📋 Copy</button>
+                        <button class="gos-btn btn-sm btn-primary" onclick="event.stopPropagation(); app.markEventCompleted('linkedin', '${l.leadId}')" style="flex:1; min-height:44px;">✓ Done</button>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `}
+        </div>
       </div>
+
     `;
+  }
+
+  isTaskCompleted(task) {
+    const completedStatus = this.taskColumns[this.taskColumns.length - 1] || 'Completed';
+    return task.status === completedStatus || task.status === 'Completed' || task.status === 'Done';
+  }
+
+  toggleTask(taskId) {
+    const task = this.data.tasks.find(t => t.taskId === taskId);
+    if (!task) return;
+    const completedStatus = this.taskColumns[this.taskColumns.length - 1] || 'Completed';
+    task.status = this.isTaskCompleted(task) ? 'To Do' : completedStatus;
+    this.render();
+    if (this.sheetsConnected) {
+      if (task._rowIndex !== undefined) {
+        sheetsService.updateRecord('tasks', task._rowIndex, task)
+          .catch(err => {
+            console.error('Toggle task sync failed:', err);
+            task._syncStatus = 'Pending Sync';
+            task._syncError = this.getFriendlyErrorMessage(err);
+            this.saveLocalData();
+            this.render();
+          });
+      } else {
+        task._syncStatus = 'Pending Sync';
+        task._syncError = 'Row index is undefined';
+        this.saveLocalData();
+        this.render();
+      }
+    }
   }
 
   renderTaskItem(task) {
@@ -981,7 +1331,7 @@ class GeloGrowthOS {
 
     return `
       <li class="gos-task-item ${overdueClass}" onclick="app.openTaskPanel('${task.taskId}')">
-        <div class="gos-task-check ${task.status === 'Completed' ? 'checked' : ''}" onclick="event.stopPropagation(); app.toggleTask('${task.taskId}')"></div>
+        <div class="gos-task-check ${this.isTaskCompleted(task) ? 'checked' : ''}" onclick="event.stopPropagation(); app.toggleTask('${task.taskId}')"></div>
         <div class="gos-task-info">
           <div class="gos-task-title">${task.title}</div>
           <div class="gos-task-meta">
@@ -1018,10 +1368,10 @@ class GeloGrowthOS {
   // ── LinkedIn Leads View ─────────────────────────────────────
   renderLinkedIn(container) {
     const leads = this.data.linkedinLeads;
-    const activeLeads = leads.filter(l => !['Closed Won', 'Closed Lost', 'Not Fit'].includes(l.stage));
+    const activeLeads = leads.filter(l => !['Closed', 'Recycle'].includes(l.stage));
     const noAction = activeLeads.filter(l => isOverdue(l.nextActionDate));
     const totalProjected = activeLeads.reduce((s, l) => s + (l.projectedCloseAmount || 0), 0);
-    const convertedCount = leads.filter(l => ['Qualified', 'Call Booked', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost'].includes(l.stage) || l.convertedToPipeline === 'Yes' || this.data.primePipeline.some(p => String(p.sourceLeadId) === String(l.leadId))).length;
+    const convertedCount = leads.filter(l => l.stage === 'Closed').length;
 
     const dataTableContent = this.renderDataTable(this.filteredData, [
       { key: 'contactName', label: 'Name', editable: true, editType: 'text', render: (v) => `<span class="cell-name clickable-edit-name">${v || '—'}</span>` },
@@ -1030,9 +1380,9 @@ class GeloGrowthOS {
       { key: 'email', label: 'Email Address', editable: true, editType: 'text' },
       { key: 'source', label: 'Source', editable: true, editType: 'select', editOptions: ['LinkedIn', 'Facebook', 'Instagram', 'Network', 'Referral', 'Website', 'Other'] },
       { key: 'linkedinUrl', label: 'Profile / URL', editable: true, editType: 'text', render: (v) => v ? `<a href="${v.startsWith('http') ? v : 'https://' + v}" target="_blank" class="gos-link" onclick="event.stopPropagation()">${v.replace(/https?:\/\/(www\.)?/, '')}</a>` : '—' },
-      { key: 'stage', label: 'Stage', editable: true, editType: 'select', editOptions: ['New', 'Contacted', 'Qualified', 'Call Booked', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost', 'Not Fit'] },
+      { key: 'stage', label: 'Stage', editable: true, editType: 'select', editOptions: ['New', 'Qualified', 'Contacted', 'Nurturing', 'Closed', 'Recycle'] },
       { key: 'nextAction', label: 'Next Action', editable: true, editType: 'select', editOptions: ['Send first message', 'Follow up', 'Book discovery call', 'Send proposal', 'Prepare call notes', 'Check payment', 'Mark as not fit', 'Custom'], render: (v) => `<span class="truncate" style="max-width:150px;display:inline-block">${v || '—'}</span>` },
-      { key: 'nextActionDate', label: 'Follow-up Date', editable: true, editType: 'date', render: (v) => this.renderDueDate(v) },
+      { key: 'nextActionDate', label: 'Follow-up Date', editable: true, editType: 'date', render: (v, r) => this.renderDueDate(v, r.followUpTime) },
       { key: 'projectedCloseAmount', label: 'Projected Close Amount', editable: true, editType: 'number', render: (v) => v ? `₱${this.formatNumber(v)}` : '₱0' },
     ], 'linkedin', 'leadId', 'Leads');
 
@@ -1044,9 +1394,9 @@ class GeloGrowthOS {
           <div class="gos-kpi-detail">${activeLeads.length} active</div>
         </div>
         <div class="gos-kpi-card green">
-          <div class="gos-kpi-header"><span class="gos-kpi-label">Converted</span><span class="gos-kpi-icon">${getIconSvg('award', 18)}</span></div>
+          <div class="gos-kpi-header"><span class="gos-kpi-label">Closed Leads</span><span class="gos-kpi-icon">${getIconSvg('award', 18)}</span></div>
           <div class="gos-kpi-value">${convertedCount}</div>
-          <div class="gos-kpi-detail">${convertedCount} converted opportunities</div>
+          <div class="gos-kpi-detail">${convertedCount} closed leads</div>
         </div>
         <div class="gos-kpi-card blue">
           <div class="gos-kpi-header"><span class="gos-kpi-label">Active Value</span><span class="gos-kpi-icon">${getIconSvg('dollarSign', 18)}</span></div>
@@ -1070,10 +1420,10 @@ class GeloGrowthOS {
     const activeDeals = pipeline.filter(p => !['Closed Won', 'Closed Lost'].includes(p.stage));
     const totalPipeline = activeDeals.reduce((s, p) => s + (p.estimatedValue || 0), 0);
     const totalWeighted = activeDeals.reduce((s, p) => s + (p.weightedValue || 0), 0);
-    const convertedCount = pipeline.filter(p => p.sourceLeadId).length;
+    const convertedCount = pipeline.filter(p => p.stage === 'Closed').length;
 
     const totalPaid = pipeline.filter(p => p.paymentStatus === 'Paid').reduce((s, p) => s + (p.estimatedValue || 0), 0);
-    const totalWonPending = pipeline.filter(p => p.stage === 'Closed Won' && p.paymentStatus !== 'Paid').reduce((s, p) => s + (p.estimatedValue || 0), 0);
+    const totalWonPending = pipeline.filter(p => p.stage === 'Closed' && p.paymentStatus !== 'Paid').reduce((s, p) => s + (p.estimatedValue || 0), 0);
     const totalWon = totalPaid + totalWonPending;
 
     container.innerHTML = `
@@ -1089,9 +1439,9 @@ class GeloGrowthOS {
           <div class="gos-kpi-detail">probability-adjusted value</div>
         </div>
         <div class="gos-kpi-card green">
-          <div class="gos-kpi-header"><span class="gos-kpi-label">Converted</span><span class="gos-kpi-icon">${getIconSvg('award', 18)}</span></div>
+          <div class="gos-kpi-header"><span class="gos-kpi-label">Closed Deals</span><span class="gos-kpi-icon">${getIconSvg('award', 18)}</span></div>
           <div class="gos-kpi-value">${convertedCount}</div>
-          <div class="gos-kpi-detail">${convertedCount} converted opportunities</div>
+          <div class="gos-kpi-detail">${convertedCount} closed deals</div>
         </div>
         <div class="gos-kpi-card amber">
           <div class="gos-kpi-header"><span class="gos-kpi-label">Won Revenue</span><span class="gos-kpi-icon">${getIconSvg('dollarSign', 18)}</span></div>
@@ -1103,13 +1453,13 @@ class GeloGrowthOS {
       ${this.renderDataTable(this.filteredData, [
         { key: 'contactName', label: 'Contact', render: (v, r) => `<span class="cell-name clickable-edit-name" onclick="event.stopPropagation(); app.startInlineEdit(this, 'prime', '${r.opportunityId}', 'contactName', 'text')">${v || '—'}</span><br><span class="cell-company clickable-edit-company" onclick="event.stopPropagation(); app.startInlineEdit(this, 'prime', '${r.opportunityId}', 'orgName', 'text')">${r.orgName || 'Company'}</span>` },
         { key: 'serviceInterest', label: 'Service', editable: true, editType: 'text', render: (v) => `<span class="truncate" style="max-width:180px;display:inline-block">${v}</span>` },
-        { key: 'stage', label: 'Stage', editable: true, editType: 'select', editOptions: ['New Inquiry', 'Qualified', 'Discovery', 'Proposal Sent', 'Negotiation', 'Won', 'Lost', 'Handoff', 'Closed Won', 'Closed Lost'] },
+        { key: 'stage', label: 'Stage', editable: true, editType: 'select', editOptions: ['New Inquiry', 'Qualified', 'Discovery', 'Proposal Sent', 'Negotiation', 'Won', 'Lost', 'Handoff', 'Closed'] },
         { key: 'dealStatus', label: 'Deal Status', editable: true, editType: 'select', editOptions: ['Open', 'In Progress', 'Won', 'Lost', 'Paid', 'Closed'], render: (v) => this.renderBadge(v) },
         { key: 'paymentStatus', label: 'Payment', editable: true, editType: 'select', editOptions: ['Unpaid', 'Partial', 'Paid', 'Refunded', 'Cancelled'], render: (v) => this.renderBadge(v) },
         { key: 'estimatedValue', label: 'Value', editable: true, editType: 'number', render: (v) => `<span class="cell-value">₱${(v || 0).toLocaleString()}</span>` },
         { key: 'probabilityPercent', label: 'Prob.', editable: true, editType: 'number', render: (v) => `${v || 0}%` },
         { key: 'nextAction', label: 'Next Action', editable: true, editType: 'text', render: (v) => `<span class="truncate" style="max-width:180px;display:inline-block">${v || '—'}</span>` },
-        { key: 'nextActionDate', label: 'Due', editable: true, editType: 'date', render: (v) => this.renderDueDate(v) },
+        { key: 'nextActionDate', label: 'Due', editable: true, editType: 'date', render: (v, r) => this.renderDueDate(v, r.nextActionTime) },
       ], 'prime', 'opportunityId')}
     `;
   }
@@ -1152,7 +1502,7 @@ class GeloGrowthOS {
         { key: 'format', label: 'Format' },
         { key: 'channel', label: 'Channel' },
         { key: 'status', label: 'Status', render: (v) => this.renderBadge(v) },
-        { key: 'plannedPublishAt', label: 'Publish Date', render: (v) => this.renderDueDate(v) },
+        { key: 'plannedPublishAt', label: 'Publish Date', render: (v, r) => this.renderDueDate(v, r.plannedPublishTime) },
         { key: 'views', label: 'Views', render: (v) => v > 0 ? this.formatNumber(v) : '—' },
       ], 'scc', 'contentId')}
     `;
@@ -1324,8 +1674,11 @@ class GeloGrowthOS {
           </thead>
           <tbody>
             ${data.map(record => {
-              const rowCells = columns.map(col => {
+              const rowCells = columns.map((col, idx) => {
                 let content = col.render ? col.render(record[col.key], record) : (record[col.key] || '—');
+                if (idx === 0) {
+                  content = `${content} ${this.renderSyncBadgeInline(viewType, record[idKey], record)}`;
+                }
                 if (col.editable) {
                   const editOptions = col.editOptions ? JSON.stringify(col.editOptions) : 'null';
                   content = `
@@ -1372,7 +1725,7 @@ class GeloGrowthOS {
       <div class="gos-card-list show-on-mobile mobile-only-cards" style="display:none">
         ${data.map(record => {
           if (viewType === 'linkedin') {
-            const mainTitle = record.contactName || 'No Name';
+            const mainTitle = `${record.contactName || 'No Name'} ${this.renderSyncBadgeInline('linkedin', record.leadId, record)}`;
             const stageBadge = record.stage ? this.renderBadge(record.stage) : '';
             const priorityBadge = record.priority ? this.renderBadge(record.priority) : '';
             const amountText = record.projectedCloseAmount ? `₱${this.formatNumber(record.projectedCloseAmount)}` : '₱0';
@@ -1428,7 +1781,7 @@ class GeloGrowthOS {
             `;
           }
 
-          const mainTitle = record.contactName || record.title || record.customerName || 'No Name';
+          const mainTitle = `${record.contactName || record.title || record.customerName || 'No Name'} ${this.renderSyncBadgeInline(viewType, record[idKey], record)}`;
           const secondary = record.company || record.orgName || record.contentPillar || record.itemsSummary || '';
           const stageBadge = record.stage ? this.renderBadge(record.stage) : (record.status ? this.renderBadge(record.status) : '');
           
@@ -1522,7 +1875,7 @@ class GeloGrowthOS {
   }
 
   // ── Due Date Renderer ───────────────────────────────────────
-  renderDueDate(dateStr) {
+  renderDueDate(dateStr, timeStr) {
     if (!dateStr) return '<span class="text-muted">—</span>';
     const days = daysUntil(dateStr);
     let cls, label, icon;
@@ -1545,7 +1898,67 @@ class GeloGrowthOS {
       icon = '';
     }
 
+    if (timeStr) {
+      const formattedTime = this.formatTime(timeStr);
+      if (cls === 'due-later') {
+        label = `${dateStr} @ ${formattedTime}`;
+      } else {
+        label = `${label} @ ${formattedTime}`;
+      }
+    }
+
     return `<span class="gos-due ${cls}">${icon} ${label}</span>`;
+  }
+
+  // ── Time / Date Helpers ─────────────────────────────────────
+  formatTime(timeStr) {
+    if (!timeStr) return '';
+    // timeStr may be HH:MM (24h) from a time input
+    try {
+      const [h, m] = timeStr.split(':').map(Number);
+      if (isNaN(h) || isNaN(m)) return timeStr;
+      const suffix = h >= 12 ? 'PM' : 'AM';
+      const h12 = h % 12 === 0 ? 12 : h % 12;
+      return `${h12}:${String(m).padStart(2, '0')} ${suffix}`;
+    } catch (e) {
+      return timeStr;
+    }
+  }
+
+  formatDateTime(dateStr, timeStr) {
+    if (!dateStr && !timeStr) return '<span class="text-muted">—</span>';
+    if (!dateStr) return this.formatTime(timeStr);
+    if (!timeStr) return dateStr;
+    return `${dateStr} @ ${this.formatTime(timeStr)}`;
+  }
+
+  updateTopbarSyncStatus(status) {
+    const el = document.getElementById('topbar-sync-status');
+    if (!el) return;
+    clearTimeout(this._syncStatusTimer);
+    if (status === 'syncing') {
+      el.textContent = '⏳ Syncing';
+      el.style.display = 'inline-block';
+      el.style.background = 'rgba(139,92,246,0.15)';
+      el.style.color = '#a78bfa';
+      el.style.border = '1px solid rgba(139,92,246,0.3)';
+    } else if (status === 'synced') {
+      el.textContent = '✓ Synced';
+      el.style.display = 'inline-block';
+      el.style.background = 'rgba(16,185,129,0.15)';
+      el.style.color = '#34d399';
+      el.style.border = '1px solid rgba(16,185,129,0.3)';
+      this._syncStatusTimer = setTimeout(() => { el.style.display = 'none'; }, 3000);
+    } else if (status === 'error') {
+      el.textContent = '⚠ Sync Error';
+      el.style.display = 'inline-block';
+      el.style.background = 'rgba(239,68,68,0.15)';
+      el.style.color = '#f87171';
+      el.style.border = '1px solid rgba(239,68,68,0.3)';
+      this._syncStatusTimer = setTimeout(() => { el.style.display = 'none'; }, 6000);
+    } else {
+      el.style.display = 'none';
+    }
   }
 
   // ── Detail Panel ────────────────────────────────────────────
@@ -1581,6 +1994,43 @@ class GeloGrowthOS {
     panelTitle.textContent   = this.getRecordTitle(viewType, record);
     panelBody.innerHTML      = this.renderRecordDetail(viewType, record);
 
+    if (this.sheetsConnected) {
+      const status = record._syncStatus || 'Synced';
+      let syncInfoHtml = '';
+      if (status === 'Pending Sync' || status === 'Sync Failed') {
+        const errorMsg = record._syncError || 'Sync failed due to a network or script error.';
+        syncInfoHtml = `
+          <div class="gos-panel-section sync-status-section" style="border-top: 2px dashed var(--border); padding-top: 15px; margin-top: 15px;">
+            <div class="gos-panel-section-title" style="display: flex; align-items: center; justify-content: space-between;">
+              <span>🔄 Google Sheets Sync</span>
+              <span class="gos-badge badge-pending-sync">Pending Sync</span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-danger); background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); padding: 8px; border-radius: var(--radius-sm); margin-bottom: 8px; margin-top: 8px; font-family: monospace; word-break: break-all;">
+              <strong>Error:</strong> ${errorMsg}
+            </div>
+            <button class="gos-btn gos-btn-primary btn-sm w-full" style="width: 100%; justify-content: center;" onclick="app.retryRecordSync('${viewType}', '${record[config.idKey]}')">
+              🔄 Retry Sync Now
+            </button>
+          </div>
+        `;
+      } else if (status === 'Syncing') {
+        syncInfoHtml = `
+          <div class="gos-panel-section sync-status-section" style="border-top: 1px solid var(--border); padding-top: 10px; margin-top: 15px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--text-muted);">
+            <span>🔄 Sheets Sync Status:</span>
+            <span class="gos-badge badge-normal">Syncing...</span>
+          </div>
+        `;
+      } else {
+        syncInfoHtml = `
+          <div class="gos-panel-section sync-status-section" style="border-top: 1px solid var(--border); padding-top: 10px; margin-top: 15px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--text-muted);">
+            <span>🔄 Sheets Sync Status:</span>
+            <span class="gos-badge badge-converted">Synced</span>
+          </div>
+        `;
+      }
+      panelBody.innerHTML += syncInfoHtml;
+    }
+
     if (panelFooter) {
       const idFieldName = Object.keys(record).find(k => k.endsWith('Id') && k !== 'contactId' && k !== 'organizationId' && k !== 'sourceLeadId') || 'id';
       const idVal = record[idFieldName];
@@ -1597,38 +2047,10 @@ class GeloGrowthOS {
   }
 
   openTaskPanel(taskId) {
-    const task = this.data.tasks.find(t => t.taskId === taskId);
-    if (!task) return;
-
-    this.selectedRecord = { viewType: 'task', record: task };
-
-    const panel = document.getElementById('detail-panel');
-    const overlay = document.getElementById('panel-overlay');
-    const panelFooter = document.getElementById('panel-footer');
-    document.getElementById('panel-title').textContent = 'Task Details';
-    document.getElementById('panel-body').innerHTML = `
-      <div class="gos-panel-section">
-        <div class="gos-panel-section-title">Task Information</div>
-        ${this.renderField('Title', task.title)}
-        ${this.renderField('Priority', this.renderBadge(task.priority))}
-        ${this.renderField('Status', this.renderBadge(task.status))}
-        ${this.renderField('Due Date', this.renderDueDate(task.dueAt))}
-        ${this.renderField('Type', task.taskType)}
-        ${this.renderField('Related To', `${task.recordType} — ${task.recordId}`)}
-        ${this.renderField('Assigned To', task.assignedTo)}
-        ${this.renderField('Notes', task.notes)}
-      </div>
-    `;
-
-    if (panelFooter) {
-      panelFooter.innerHTML = `
-        <button class="gos-btn gos-btn-secondary" onclick="app.closePanel()">Close</button>
-      `;
-    }
-
-    panel.classList.add('open');
-    overlay.classList.add('open');
+    // Delegate to the full panel system so Delete / Edit buttons work correctly
+    this.openRecordPanel('tasks', taskId);
   }
+
 
   openSourcePanel(sourceId) {
     const source = this.data.sourceAssets.find(s => s.sourceId === sourceId);
@@ -1929,19 +2351,34 @@ class GeloGrowthOS {
     }
 
     if (viewType === 'linkedin' || viewType === 'prime') {
+      this.updateTopbarSyncStatus('syncing');
       await this.syncLeadAndOpportunity(viewType, recordId);
     } else {
-      this.showToast('⚡ Saving changes...', 'info');
+      this.updateTopbarSyncStatus('syncing');
       try {
-        await sheetsService.updateRecord(config.tabKey, record._rowIndex, record);
-        this.showToast('✅ Saved to Google Sheets', 'success');
+        if (record._rowIndex !== undefined) {
+          await sheetsService.updateRecord(config.tabKey, record._rowIndex, record);
+        } else {
+          const res = await sheetsService.appendRecord(config.tabKey, record);
+          record._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
+        }
+        delete record._syncStatus;
+        delete record._syncError;
+        this.saveLocalData();
+        this.updateTopbarSyncStatus('synced');
         this.syncStatus = 'Synced';
         this.syncError = null;
+        this.render(); // update badges
       } catch (err) {
-        this.showToast('⚠️ Sync failed. Saved locally only.', 'warning');
-        console.error(err);
+        console.error('Inline edit sync failed:', err);
+        const userErr = this.getFriendlyErrorMessage(err);
+        record._syncStatus = 'Sync Failed';
+        record._syncError = userErr;
+        this.saveLocalData();
+        this.updateTopbarSyncStatus('error');
         this.syncStatus = 'Error';
-        this.syncError = err.message || err;
+        this.syncError = userErr;
+        this.render(); // update badges
       }
     }
     this.renderContent();
@@ -2009,7 +2446,6 @@ class GeloGrowthOS {
     lead.pipelineStage = 'Discovery';
     lead.dealStatus = 'Open';
     lead.paymentStatus = 'Unpaid';
-    lead.stage = 'Converted';
 
     this.showToast('🚀 Converting lead to pipeline opportunity...', 'info');
     this.renderContent();
@@ -2071,11 +2507,19 @@ class GeloGrowthOS {
     const { viewType, record } = this.selectedRecord;
 
     const dataMap = {
-      'linkedin': { data: this.data.linkedinLeads, idKey: 'leadId', tabKey: 'linkedinLeads' },
-      'prime': { data: this.data.primePipeline, idKey: 'opportunityId', tabKey: 'primePipeline' },
-      'scc': { data: this.data.sccContent, idKey: 'contentId', tabKey: 'sccContent' },
-      'calmera': { data: this.data.calmeraOrders, idKey: 'orderId', tabKey: 'calmeraOrders' },
-      'repurposing': { data: this.data.repurposeOutputs, idKey: 'outputId', tabKey: 'repurposeOutputs' },
+      'linkedin':   { data: this.data.linkedinLeads,    idKey: 'leadId',       tabKey: 'linkedinLeads' },
+      'prime':      { data: this.data.primePipeline,    idKey: 'opportunityId', tabKey: 'primePipeline' },
+      'scc':        { data: this.data.sccContent,       idKey: 'contentId',     tabKey: 'sccContent' },
+      'calmera':    { data: this.data.calmeraOrders,    idKey: 'orderId',       tabKey: 'calmeraOrders' },
+      'repurposing':{ data: this.data.repurposeOutputs, idKey: 'outputId',      tabKey: 'repurposeOutputs' },
+      'tasks':      { data: this.data.tasks,            idKey: 'taskId',        tabKey: 'tasks' },
+      'projects':   { data: this.data.projects,         idKey: 'projectId',     tabKey: 'projects' },
+      'clients':    { data: this.data.clients,          idKey: 'clientId',      tabKey: 'clients' },
+      'goals':      { data: this.data.goals,            idKey: 'goalId',        tabKey: 'goals' },
+      'habits':     { data: this.data.habits,           idKey: 'habitId',       tabKey: 'habits' },
+      'learning':   { data: this.data.learning,         idKey: 'learningId',    tabKey: 'learning' },
+      'notes':      { data: this.data.notes,            idKey: 'noteId',        tabKey: 'notes' },
+      'sops':       { data: this.data.sops,             idKey: 'sopId',         tabKey: 'sops' },
     };
 
     const config = dataMap[viewType];
@@ -2090,6 +2534,7 @@ class GeloGrowthOS {
       const numberFields = new Set([
         'qualificationScore', 'estimatedValue', 'probabilityPercent', 'weightedValue',
         'orderAmount', 'views', 'comments', 'saves', 'replies', 'engagements', 'leadsGenerated',
+        'budget', 'progress', 'accountValue', 'targetMetric', 'currentMetric', 'streak',
       ]);
       if (numberFields.has(key) && val !== '' && val !== null) {
         record[key] = parseFloat(val) || 0;
@@ -2301,8 +2746,21 @@ class GeloGrowthOS {
       }
     }
 
+    if (viewType === 'linkedin' && (record.stage === 'Closed Won' || record.stage === 'Closed')) {
+      const opp = (this.data.primePipeline || []).find(p => String(p.sourceLeadId) === String(record.leadId));
+      if (opp) {
+        opp.stage = 'Closed';
+        opp.dealStatus = 'Won';
+        opp.closeDate = today;
+      }
+      this.triggerLeadToClientConversion(record);
+    }
+
     // Run denormalize locally to immediately update view properties (like contactName and company)
     sheetsService._denormalize(this.data);
+
+    // ── Save locally IMMEDIATELY (before async Sheets write) ──
+    this.saveLocalData();
 
     // Refresh CRM views and reopen panel in view mode
     this.applyFilters();
@@ -2312,40 +2770,70 @@ class GeloGrowthOS {
 
     // Sync in background to Sheets (if connected)
     if (this.sheetsConnected) {
-      const rowIndex = record._rowIndex;
-      if (rowIndex !== undefined) {
+      this.updateTopbarSyncStatus('syncing');
+      (async () => {
         try {
-          // Write/Update the Main Record
-          await sheetsService.updateRecord(config.tabKey, rowIndex, record);
-          
           // Write/Update Contact
           if (contactToSave) {
-            if (isNewContact) {
-              await sheetsService.appendRecord('contacts', contactToSave)
-                .then(res => { if (res && res.rowsAfter !== undefined) contactToSave._rowIndex = res.rowsAfter - 1; });
-            } else if (contactToSave._rowIndex !== undefined) {
+            if (isNewContact || contactToSave._rowIndex === undefined) {
+              const res = await sheetsService.appendRecord('contacts', contactToSave);
+              if (res && res.rowsAfter !== undefined) contactToSave._rowIndex = res.rowsAfter - 1;
+            } else {
               await sheetsService.updateRecord('contacts', contactToSave._rowIndex, contactToSave);
             }
           }
           
           // Write/Update Organization
           if (orgToSave) {
-            if (isNewOrg) {
-              await sheetsService.appendRecord('organizations', orgToSave)
-                .then(res => { if (res && res.rowsAfter !== undefined) orgToSave._rowIndex = res.rowsAfter - 1; });
-            } else if (orgToSave._rowIndex !== undefined) {
+            if (isNewOrg || orgToSave._rowIndex === undefined) {
+              const res = await sheetsService.appendRecord('organizations', orgToSave);
+              if (res && res.rowsAfter !== undefined) orgToSave._rowIndex = res.rowsAfter - 1;
+            } else {
               await sheetsService.updateRecord('organizations', orgToSave._rowIndex, orgToSave);
             }
           }
 
-          this.showToast('📤 Saved to Google Sheets', 'success');
+          // Write/Update the Main Record
+          const rowIndex = record._rowIndex;
+          if (rowIndex !== undefined) {
+            await sheetsService.updateRecord(config.tabKey, rowIndex, record);
+          } else {
+            const res = await sheetsService.appendRecord(config.tabKey, record);
+            if (res && res.rowsAfter !== undefined) {
+              record._rowIndex = res.rowsAfter - 1;
+            }
+          }
+
+          delete record._syncStatus;
+          delete record._syncError;
+          this.saveLocalData();
+          this.updateTopbarSyncStatus('synced');
+          this.showToast('📤 Changes synced to Google Sheets', 'success');
+          this.render(); // update badges
         } catch (err) {
           console.error('Sheet update failed:', err);
-          this.showToast('⚠️ Saved locally, but failed to sync to Google Sheets. Check your Apps Script deployment!', 'warning');
+          const userErr = this.getFriendlyErrorMessage(err);
+          record._syncStatus = 'Sync Failed';
+          record._syncError = userErr;
+          this.saveLocalData();
+          this.updateTopbarSyncStatus('error');
+          this.showToast(`⚠️ Saved locally, but sheet sync failed: ${userErr}`, 'warning');
+          this.render(); // update badges
         }
-      } else {
-        this.showToast('⚠️ Sheet row index not found. Saved only locally.', 'warning');
+      })();
+    } else if (sheetsService.isConfigured()) {
+      record._syncStatus = 'Pending Sync';
+      record._syncError = 'Not connected to Google Sheets. Click retry in the details panel or check settings.';
+      if (contactToSave) {
+        contactToSave._syncStatus = 'Pending Sync';
+        contactToSave._syncError = 'Not connected to Google Sheets.';
       }
+      if (orgToSave) {
+        orgToSave._syncStatus = 'Pending Sync';
+        orgToSave._syncError = 'Not connected to Google Sheets.';
+      }
+      this.saveLocalData();
+      this.render();
     }
   }
 
@@ -2365,11 +2853,19 @@ class GeloGrowthOS {
   async _doDeleteRecord(viewType, record) {
 
     const dataMap = {
-      'linkedin':   { data: this.data.linkedinLeads, idKey: 'leadId', tabKey: 'linkedinLeads' },
-      'prime':      { data: this.data.primePipeline, idKey: 'opportunityId', tabKey: 'primePipeline' },
-      'scc':        { data: this.data.sccContent, idKey: 'contentId', tabKey: 'sccContent' },
-      'calmera':    { data: this.data.calmeraOrders, idKey: 'orderId', tabKey: 'calmeraOrders' },
-      'repurposing':{ data: this.data.repurposeOutputs, idKey: 'outputId', tabKey: 'repurposeOutputs' },
+      'linkedin':   { data: this.data.linkedinLeads,    idKey: 'leadId',       tabKey: 'linkedinLeads' },
+      'prime':      { data: this.data.primePipeline,    idKey: 'opportunityId', tabKey: 'primePipeline' },
+      'scc':        { data: this.data.sccContent,       idKey: 'contentId',     tabKey: 'sccContent' },
+      'calmera':    { data: this.data.calmeraOrders,    idKey: 'orderId',       tabKey: 'calmeraOrders' },
+      'repurposing':{ data: this.data.repurposeOutputs, idKey: 'outputId',      tabKey: 'repurposeOutputs' },
+      'tasks':      { data: this.data.tasks,            idKey: 'taskId',        tabKey: 'tasks' },
+      'projects':   { data: this.data.projects,         idKey: 'projectId',     tabKey: 'projects' },
+      'clients':    { data: this.data.clients,          idKey: 'clientId',      tabKey: 'clients' },
+      'goals':      { data: this.data.goals,            idKey: 'goalId',        tabKey: 'goals' },
+      'habits':     { data: this.data.habits,           idKey: 'habitId',       tabKey: 'habits' },
+      'learning':   { data: this.data.learning,         idKey: 'learningId',    tabKey: 'learning' },
+      'notes':      { data: this.data.notes,            idKey: 'noteId',        tabKey: 'notes' },
+      'sops':       { data: this.data.sops,             idKey: 'sopId',         tabKey: 'sops' },
     };
 
     const config = dataMap[viewType];
@@ -2385,17 +2881,33 @@ class GeloGrowthOS {
       if (r._rowIndex !== undefined && r._rowIndex > rowIndex) r._rowIndex--;
     });
 
+    // Save locally immediately so deletion survives a page reload
+    this.saveLocalData();
+
     this.closePanel();
     this.applyFilters();
     this.render();
-    this.showToast('Record deleted locally!', 'success');
+    this.showToast('Record deleted!', 'success');
 
-    if (this.sheetsConnected && rowIndex !== undefined) {
+    if (this.sheetsConnected) {
       try {
-        await sheetsService.deleteRecord(config.tabKey, rowIndex);
+        if (rowIndex !== undefined) {
+          // Fast path: we know the exact row
+          await sheetsService.deleteRecord(config.tabKey, rowIndex);
+        } else {
+          // Fallback: let Apps Script find and delete the row by unique ID
+          const tabName = config.tabKey; // sheetsService resolves this internally
+          await sheetsService.sendPostRequest({
+            action: 'delete',
+            module: tabName,
+            tab: tabName,
+            data: { [config.idKey]: recordId },
+          });
+        }
         this.showToast('🗑️ Deleted from Google Sheets', 'success');
       } catch (err) {
-        this.showToast('⚠️ Deleted locally, but Google Sheets delete failed.', 'warning');
+        console.error('Sheet delete failed:', err);
+        this.showToast(`⚠️ Deleted locally. Sheet delete failed: ${this.getFriendlyErrorMessage(err)}`, 'warning');
       }
     }
   }
@@ -2453,7 +2965,7 @@ class GeloGrowthOS {
                 <div class="gos-form-group">
                   <label class="gos-form-label">Stage</label>
                   <select class="gos-form-select" name="stage">
-                    ${['New', 'Contacted', 'Qualified', 'Proposal', 'Closed Won', 'Closed Lost', 'Not Fit', 'Connection Sent', 'Connected', 'Thank You Sent', 'Follow-up Due', 'Replied', 'Call Booked', 'Call Done'].map(opt => `
+                    ${['New', 'Qualified', 'Contacted', 'Nurturing', 'Closed', 'Recycle'].map(opt => `
                       <option value="${opt}" ${r.stage === opt ? 'selected' : ''}>${opt}</option>
                     `).join('')}
                   </select>
@@ -2490,6 +3002,27 @@ class GeloGrowthOS {
                 </div>
               </div>
 
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Follow-up Time</label>
+                  <input class="gos-form-input" type="time" name="followUpTime" value="${r.followUpTime || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Call Date</label>
+                  <input class="gos-form-input" type="date" name="callDate" value="${r.callDate || ''}">
+                </div>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Call Time</label>
+                  <input class="gos-form-input" type="time" name="callTime" value="${r.callTime || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <!-- empty spacer -->
+                </div>
+              </div>
+
               <div class="gos-form-group">
                 <label class="gos-form-label">Notes</label>
                 <textarea class="gos-form-textarea" name="notes" rows="4">${r.notes || ''}</textarea>
@@ -2522,7 +3055,7 @@ class GeloGrowthOS {
                 <div class="gos-form-group">
                   <label class="gos-form-label">Stage</label>
                   <select class="gos-form-select" name="stage">
-                    ${['Inquiry', 'Discovery', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost'].map(opt => `
+                    ${['New Inquiry', 'Qualified', 'Discovery', 'Proposal Sent', 'Negotiation', 'Won', 'Lost', 'Handoff', 'Closed'].map(opt => `
                       <option value="${opt}" ${r.stage === opt ? 'selected' : ''}>${opt}</option>
                     `).join('')}
                   </select>
@@ -2530,7 +3063,7 @@ class GeloGrowthOS {
                 <div class="gos-form-group">
                   <label class="gos-form-label">Deal Status</label>
                   <select class="gos-form-select" name="dealStatus">
-                    ${['Open', 'In Progress', 'Won', 'Lost', 'Paid'].map(opt => `
+                    ${['Open', 'In Progress', 'Won', 'Lost', 'Paid', 'Closed'].map(opt => `
                       <option value="${opt}" ${r.dealStatus === opt ? 'selected' : ''}>${opt}</option>
                     `).join('')}
                   </select>
@@ -2562,9 +3095,26 @@ class GeloGrowthOS {
                 <input class="gos-form-input" name="nextAction" value="${r.nextAction || ''}">
               </div>
 
-              <div class="gos-form-group">
-                <label class="gos-form-label">Action Due Date</label>
-                <input class="gos-form-input" type="date" name="nextActionDate" value="${r.nextActionDate || ''}">
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Action Due Date</label>
+                  <input class="gos-form-input" type="date" name="nextActionDate" value="${r.nextActionDate || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Action Due Time</label>
+                  <input class="gos-form-input" type="time" name="nextActionTime" value="${r.nextActionTime || ''}">
+                </div>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Call Date</label>
+                  <input class="gos-form-input" type="date" name="callDate" value="${r.callDate || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Call Time</label>
+                  <input class="gos-form-input" type="time" name="callTime" value="${r.callTime || ''}">
+                </div>
               </div>
 
               <div class="gos-form-group">
@@ -2628,9 +3178,15 @@ class GeloGrowthOS {
                 <input class="gos-form-input" name="cta" value="${r.cta || ''}">
               </div>
 
-              <div class="gos-form-group">
-                <label class="gos-form-label">Planned Publish Date</label>
-                <input class="gos-form-input" type="date" name="plannedPublishAt" value="${r.plannedPublishAt || ''}">
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Planned Publish Date</label>
+                  <input class="gos-form-input" type="date" name="plannedPublishAt" value="${r.plannedPublishAt || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Planned Publish Time</label>
+                  <input class="gos-form-input" type="time" name="plannedPublishTime" value="${r.plannedPublishTime || ''}">
+                </div>
               </div>
 
               <div class="gos-form-group">
@@ -2709,6 +3265,328 @@ class GeloGrowthOS {
               <div class="gos-form-group">
                 <label class="gos-form-label">Change Notes</label>
                 <input class="gos-form-input" name="changeNotes" value="${r.changeNotes || ''}">
+              </div>
+            </div>
+          </form>
+        `;
+      case 'tasks':
+        return `
+          <form id="edit-record-form" onsubmit="event.preventDefault();">
+            <div class="gos-panel-section">
+              <div class="gos-panel-section-title">Edit Task Details</div>
+              
+              <div class="gos-form-group">
+                <label class="gos-form-label">Title *</label>
+                <input class="gos-form-input" name="title" value="${r.title || ''}" required>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Status</label>
+                  <select class="gos-form-select" name="status">
+                    ${['To Do', 'In Progress', 'Waiting', 'Review', 'Completed'].map(opt => `
+                      <option value="${opt}" ${r.status === opt ? 'selected' : ''}>${opt}</option>
+                    `).join('')}
+                  </select>
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Priority</label>
+                  <select class="gos-form-select" name="priority">
+                    ${['Low', 'Medium', 'High', 'Urgent'].map(opt => `
+                      <option value="${opt}" ${r.priority === opt ? 'selected' : ''}>${opt}</option>
+                    `).join('')}
+                  </select>
+                </div>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Start Date</label>
+                  <input class="gos-form-input" type="date" name="startDate" value="${r.startDate || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Start Time</label>
+                  <input class="gos-form-input" type="time" name="startTime" value="${r.startTime || ''}">
+                </div>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Due Date</label>
+                  <input class="gos-form-input" type="date" name="dueAt" value="${r.dueAt || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Due Time</label>
+                  <input class="gos-form-input" type="time" name="dueTime" value="${r.dueTime || ''}">
+                </div>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Project</label>
+                  <select class="gos-form-select" name="projectId">
+                    <option value="">None</option>
+                    ${(this.data.projects || []).map(p => `
+                      <option value="${p.projectId}" ${r.projectId === p.projectId ? 'selected' : ''}>${p.projectName}</option>
+                    `).join('')}
+                  </select>
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Client</label>
+                  <select class="gos-form-select" name="clientId">
+                    <option value="">None</option>
+                    ${(this.data.clients || []).map(c => `
+                      <option value="${c.clientId}" ${r.clientId === c.clientId ? 'selected' : ''}>${c.clientName}</option>
+                    `).join('')}
+                  </select>
+                </div>
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Notes</label>
+                <textarea class="gos-form-textarea" name="notes" rows="4">${r.notes || ''}</textarea>
+              </div>
+            </div>
+          </form>
+        `;
+      case 'projects':
+        return `
+          <form id="edit-record-form" onsubmit="event.preventDefault();">
+            <div class="gos-panel-section">
+              <div class="gos-panel-section-title">Edit Project Details</div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Project Name *</label>
+                <input class="gos-form-input" name="projectName" value="${r.projectName || ''}" required>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Start Date</label>
+                  <input class="gos-form-input" type="date" name="startDate" value="${r.startDate || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Start Time</label>
+                  <input class="gos-form-input" type="time" name="startTime" value="${r.startTime || ''}">
+                </div>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Deadline Date</label>
+                  <input class="gos-form-input" type="date" name="deadline" value="${r.deadline || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Deadline Time</label>
+                  <input class="gos-form-input" type="time" name="deadlineTime" value="${r.deadlineTime || ''}">
+                </div>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Client</label>
+                  <select class="gos-form-select" name="clientId">
+                    <option value="">None</option>
+                    ${(this.data.clients || []).map(c => `
+                      <option value="${c.clientId}" ${r.clientId === c.clientId ? 'selected' : ''}>${c.clientName}</option>
+                    `).join('')}
+                  </select>
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Budget (₱)</label>
+                  <input class="gos-form-input" type="number" name="budget" value="${r.budget || 0}">
+                </div>
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Progress (%)</label>
+                <input class="gos-form-input" type="number" name="progress" min="0" max="100" value="${r.progress || 0}">
+              </div>
+            </div>
+          </form>
+        `;
+      case 'clients':
+        return `
+          <form id="edit-record-form" onsubmit="event.preventDefault();">
+            <div class="gos-panel-section">
+              <div class="gos-panel-section-title">Edit Client Details</div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Client Name *</label>
+                <input class="gos-form-input" name="clientName" value="${r.clientName || ''}" required>
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Services</label>
+                <input class="gos-form-input" name="services" value="${r.services || ''}" placeholder="e.g. Consulting, Branding">
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">End Date</label>
+                  <input class="gos-form-input" type="date" name="endDate" value="${r.endDate || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Account Value (₱)</label>
+                  <input class="gos-form-input" type="number" name="accountValue" value="${r.accountValue || 0}">
+                </div>
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Linked Lead ID</label>
+                <input class="gos-form-input" name="leadId" value="${r.leadId || ''}" readonly style="background:var(--surface-hover); opacity:0.7">
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Client Notes</label>
+                <textarea class="gos-form-textarea" name="notes" rows="4">${r.notes || ''}</textarea>
+              </div>
+            </div>
+          </form>
+        `;
+      case 'goals':
+        return `
+          <form id="edit-record-form" onsubmit="event.preventDefault();">
+            <div class="gos-panel-section">
+              <div class="gos-panel-section-title">Edit Goal</div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Goal Name *</label>
+                <input class="gos-form-input" name="goalName" value="${r.goalName || ''}" required>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Current Value</label>
+                  <input class="gos-form-input" type="number" name="currentMetric" value="${r.currentMetric || 0}" step="any">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Target Value</label>
+                  <input class="gos-form-input" type="number" name="targetMetric" value="${r.targetMetric || 0}" step="any">
+                </div>
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Notes</label>
+                <textarea class="gos-form-textarea" name="notes" rows="4">${r.notes || ''}</textarea>
+              </div>
+            </div>
+          </form>
+        `;
+      case 'habits':
+        return `
+          <form id="edit-record-form" onsubmit="event.preventDefault();">
+            <div class="gos-panel-section">
+              <div class="gos-panel-section-title">Edit Habit</div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Habit Name *</label>
+                <input class="gos-form-input" name="habitName" value="${r.habitName || ''}" required>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Frequency</label>
+                  <select class="gos-form-select" name="frequency">
+                    ${['Daily', 'Weekly', 'Weekdays', 'Weekends', 'Monthly'].map(opt => `
+                      <option value="${opt}" ${r.frequency === opt ? 'selected' : ''}>${opt}</option>
+                    `).join('')}
+                  </select>
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Current Streak</label>
+                  <input class="gos-form-input" type="number" name="streak" value="${r.streak || 0}" min="0">
+                </div>
+              </div>
+            </div>
+          </form>
+        `;
+      case 'notes':
+        return `
+          <form id="edit-record-form" onsubmit="event.preventDefault();">
+            <div class="gos-panel-section">
+              <div class="gos-panel-section-title">Edit Note</div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Title *</label>
+                <input class="gos-form-input" name="title" value="${r.title || ''}" required>
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Content</label>
+                <textarea class="gos-form-textarea" name="content" rows="10">${r.content || ''}</textarea>
+              </div>
+            </div>
+          </form>
+        `;
+      case 'learning':
+        return `
+          <form id="edit-record-form" onsubmit="event.preventDefault();">
+            <div class="gos-panel-section">
+              <div class="gos-panel-section-title">Edit Learning Item</div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Title *</label>
+                <input class="gos-form-input" name="title" value="${r.title || ''}" required>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Category</label>
+                  <input class="gos-form-input" name="category" value="${r.category || ''}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Status</label>
+                  <select class="gos-form-select" name="status">
+                    ${['To Read', 'Reading', 'Completed', 'On Hold'].map(opt => `
+                      <option value="${opt}" ${r.status === opt ? 'selected' : ''}>${opt}</option>
+                    `).join('')}
+                  </select>
+                </div>
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">URL / Link</label>
+                <input class="gos-form-input" name="url" value="${r.url || ''}" placeholder="https://...">
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Notes / Key Takeaways</label>
+                <textarea class="gos-form-textarea" name="notes" rows="4">${r.notes || ''}</textarea>
+              </div>
+            </div>
+          </form>
+        `;
+      case 'sops':
+        return `
+          <form id="edit-record-form" onsubmit="event.preventDefault();">
+            <div class="gos-panel-section">
+              <div class="gos-panel-section-title">Edit SOP</div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Process Title *</label>
+                <input class="gos-form-input" name="processTitle" value="${r.processTitle || ''}" required>
+              </div>
+
+              <div class="gos-form-row">
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Version</label>
+                  <input class="gos-form-input" name="version" value="${r.version || '1.0'}">
+                </div>
+                <div class="gos-form-group">
+                  <label class="gos-form-label">Last Updated</label>
+                  <input class="gos-form-input" type="date" name="lastUpdated" value="${r.lastUpdated || ''}">
+                </div>
+              </div>
+
+              <div class="gos-form-group">
+                <label class="gos-form-label">Steps (one per line)</label>
+                <textarea class="gos-form-textarea" name="steps" rows="8">${(() => {
+                  try {
+                    const parsed = JSON.parse(r.steps || '[]');
+                    return Array.isArray(parsed) ? parsed.join('\n') : (r.steps || '');
+                  } catch (e) { return r.steps || ''; }
+                })()}</textarea>
               </div>
             </div>
           </form>
@@ -2952,18 +3830,21 @@ class GeloGrowthOS {
 
   // ── Add Record Modal ────────────────────────────────────────
   openAddModal() {
-    const overlay   = document.getElementById('add-modal-overlay');
+    const overlay    = document.getElementById('add-modal-overlay');
     const formFields = document.getElementById('add-form-fields');
-    const titleEl   = document.getElementById('add-modal-title');
+    const titleEl    = document.getElementById('add-modal-title');
 
+    const target = this._addRecordTarget || this.currentView;
     const viewTitles = {
-      linkedin:   'Add New Lead', prime:      'Add New Opportunity',
-      scc:        'Add New Content', calmera:  'Add New Order',
-      repurposing:'Add New Output',  settings: '',
+      linkedin:   'Add New Lead',     prime:      'Add New Opportunity',
+      scc:        'Add New Content',  calmera:    'Add New Order',
+      repurposing:'Add New Output',   settings:   '',
+      tasks:      'Add New Task',     projects:   'Add New Project',
+      clients:    'Add New Client',   notes:      'Add New Note',
       'command-center': 'Add New Lead', calendar: 'Add New Lead',
       messages:   'Add New Lead',
     };
-    if (titleEl) titleEl.textContent = viewTitles[this.currentView] || 'Add New Record';
+    if (titleEl) titleEl.textContent = viewTitles[target] || 'Add New Record';
     if (formFields) formFields.innerHTML = this.getAddFormFields();
     if (overlay) overlay.style.display = 'flex';
   }
@@ -2972,14 +3853,108 @@ class GeloGrowthOS {
     if (modalId === 'add-modal') {
       const el = document.getElementById('add-modal-overlay');
       if (el) el.style.display = 'none';
+      this._addRecordTarget = null;
     } else {
       const el = document.getElementById('msg-modal-overlay');
       if (el) el.style.display = 'none';
     }
   }
 
+  // ── Quick Add Dropdown ──────────────────────────────────────
+  toggleQuickAddDropdown(event) {
+    event.stopPropagation();
+    const dd = document.getElementById('quick-add-dropdown');
+    if (!dd) return;
+    const isOpen = dd.style.display === 'block';
+    dd.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen) {
+      const close = (e) => {
+        if (!dd.contains(e.target)) {
+          dd.style.display = 'none';
+          document.removeEventListener('click', close);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', close), 0);
+    }
+  }
+
+  // ── Notifications Dropdown ──────────────────────────────────
+  toggleNotifications(event) {
+    if (event) event.stopPropagation();
+    const dd = document.getElementById('notifications-dropdown');
+    if (!dd) return;
+    const isOpen = dd.classList.contains('active');
+    
+    if (isOpen) {
+      dd.classList.remove('active');
+    } else {
+      dd.classList.add('active');
+      // Mark all as read when opening dropdown
+      if (this.notifications) {
+        this.notifications.forEach(n => n.read = true);
+        localStorage.setItem('gos_notifications_log', JSON.stringify(this.notifications));
+        this.updateNotificationsUI();
+      }
+      
+      const close = (e) => {
+        if (!dd.contains(e.target)) {
+          dd.classList.remove('active');
+          document.removeEventListener('click', close);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', close), 0);
+    }
+  }
+
+  clearNotifications(event) {
+    if (event) event.stopPropagation();
+    this.notifications = [];
+    localStorage.setItem('gos_notifications_log', JSON.stringify(this.notifications));
+    this.updateNotificationsUI();
+  }
+
+  updateNotificationsUI() {
+    const badge = document.getElementById('notifications-badge');
+    const unreadCount = (this.notifications || []).filter(n => !n.read).length;
+    if (badge) {
+      if (unreadCount > 0) {
+        badge.textContent = unreadCount;
+        badge.style.display = 'flex';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    const list = document.getElementById('notifications-dropdown-list');
+    if (list) {
+      if (!this.notifications || this.notifications.length === 0) {
+        list.innerHTML = '<div class="notification-empty">No recent activity</div>';
+      } else {
+        const typeIcons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
+        list.innerHTML = this.notifications.map(n => `
+          <div class="notification-item ${n.read ? 'read' : 'unread'} ${n.type}">
+            <span class="notification-item-icon">${typeIcons[n.type] || 'ℹ️'}</span>
+            <div class="notification-item-content">
+              <div class="notification-item-text">${n.message}</div>
+              <div class="notification-item-time">${n.timestamp}</div>
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+  }
+
+  openQuickAdd(type, event) {
+    if (event) event.stopPropagation();
+    const dd = document.getElementById('quick-add-dropdown');
+    if (dd) dd.style.display = 'none';
+    this._addRecordTarget = type;
+    this.openAddModal();
+  }
+
   getAddFormFields() {
-    switch (this.currentView) {
+    const target = this._addRecordTarget || this.currentView;
+    switch (target) {
       case 'linkedin': return `
         <div class="gos-form-row">
           <div class="gos-form-group"><label class="gos-form-label">Full Name *</label><input class="gos-form-input" name="contactName" required></div>
@@ -3009,12 +3984,11 @@ class GeloGrowthOS {
             <label class="gos-form-label">Stage</label>
             <select class="gos-form-select" name="stage">
               <option>New</option>
-              <option>Contacted</option>
               <option>Qualified</option>
-              <option>Proposal</option>
-              <option>Closed Won</option>
-              <option>Closed Lost</option>
-              <option>Not Fit</option>
+              <option>Contacted</option>
+              <option>Nurturing</option>
+              <option>Closed</option>
+              <option>Recycle</option>
             </select>
           </div>
           <div class="gos-form-group">
@@ -3035,6 +4009,14 @@ class GeloGrowthOS {
           <div class="gos-form-group"><label class="gos-form-label">Next Action</label><input class="gos-form-input" name="nextAction" placeholder="e.g. Send first message"></div>
           <div class="gos-form-group"><label class="gos-form-label">Follow-up Date</label><input class="gos-form-input" name="nextActionDate" type="date"></div>
         </div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Follow-up Time</label><input class="gos-form-input" name="followUpTime" type="time"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Call Date</label><input class="gos-form-input" name="callDate" type="date"></div>
+        </div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Call Time</label><input class="gos-form-input" name="callTime" type="time"></div>
+          <div class="gos-form-group"></div>
+        </div>
         <div class="gos-form-group"><label class="gos-form-label">Notes</label><textarea class="gos-form-textarea" name="notes" rows="3"></textarea></div>
       `;
       case 'prime': return `
@@ -3049,8 +4031,43 @@ class GeloGrowthOS {
           <div class="gos-form-group"><label class="gos-form-label">Probability (%)</label><input class="gos-form-input" name="probabilityPercent" type="number" min="0" max="100"></div>
         </div>
         <div class="gos-form-row">
+          <div class="gos-form-group">
+            <label class="gos-form-label">Stage</label>
+            <select class="gos-form-select" name="stage">
+              <option>New Inquiry</option>
+              <option>Qualified</option>
+              <option>Discovery</option>
+              <option>Proposal Sent</option>
+              <option>Negotiation</option>
+              <option>Won</option>
+              <option>Lost</option>
+              <option>Handoff</option>
+              <option>Closed</option>
+            </select>
+          </div>
+          <div class="gos-form-group">
+            <label class="gos-form-label">Deal Status</label>
+            <select class="gos-form-select" name="dealStatus">
+              <option>Open</option>
+              <option>In Progress</option>
+              <option>Won</option>
+              <option>Lost</option>
+              <option>Paid</option>
+              <option>Closed</option>
+            </select>
+          </div>
+        </div>
+        <div class="gos-form-row">
           <div class="gos-form-group"><label class="gos-form-label">Next Action</label><input class="gos-form-input" name="nextAction"></div>
           <div class="gos-form-group"><label class="gos-form-label">Action Due Date</label><input class="gos-form-input" name="nextActionDate" type="date"></div>
+        </div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Action Due Time</label><input class="gos-form-input" name="nextActionTime" type="time"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Call Date</label><input class="gos-form-input" name="callDate" type="date"></div>
+        </div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Call Time</label><input class="gos-form-input" name="callTime" type="time"></div>
+          <div class="gos-form-group"></div>
         </div>
       `;
       case 'scc': return `
@@ -3072,7 +4089,10 @@ class GeloGrowthOS {
           </div>
           <div class="gos-form-group"><label class="gos-form-label">Planned Publish Date</label><input class="gos-form-input" name="plannedPublishAt" type="date"></div>
         </div>
-        <div class="gos-form-group"><label class="gos-form-label">CTA</label><input class="gos-form-input" name="cta" placeholder="Call to action"></div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Planned Publish Time</label><input class="gos-form-input" name="plannedPublishTime" type="time"></div>
+          <div class="gos-form-group"><label class="gos-form-label">CTA</label><input class="gos-form-input" name="cta" placeholder="Call to action"></div>
+        </div>
       `;
       case 'calmera': return `
         <div class="gos-form-row">
@@ -3101,9 +4121,6 @@ class GeloGrowthOS {
               <option>Urgent</option>
             </select>
           </div>
-          <div class="gos-form-group"><label class="gos-form-label">Due Date</label><input class="gos-form-input" type="date" name="dueAt"></div>
-        </div>
-        <div class="gos-form-row">
           <div class="gos-form-group">
             <label class="gos-form-label">Project</label>
             <select class="gos-form-select" name="projectId">
@@ -3111,6 +4128,16 @@ class GeloGrowthOS {
               ${(this.data.projects || []).map(p => `<option value="${p.projectId}">${p.projectName}</option>`).join('')}
             </select>
           </div>
+        </div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Start Date</label><input class="gos-form-input" type="date" name="startDate"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Start Time</label><input class="gos-form-input" type="time" name="startTime"></div>
+        </div>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Due Date</label><input class="gos-form-input" type="date" name="dueAt"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Due Time</label><input class="gos-form-input" type="time" name="dueTime"></div>
+        </div>
+        <div class="gos-form-row">
           <div class="gos-form-group">
             <label class="gos-form-label">Client</label>
             <select class="gos-form-select" name="clientId">
@@ -3118,21 +4145,29 @@ class GeloGrowthOS {
               ${(this.data.clients || []).map(c => `<option value="${c.clientId}">${c.clientName}</option>`).join('')}
             </select>
           </div>
+          <div class="gos-form-group"></div>
         </div>
         <div class="gos-form-group"><label class="gos-form-label">Notes</label><textarea class="gos-form-textarea" name="notes" rows="3"></textarea></div>
       `;
       case 'projects': return `
         <div class="gos-form-group"><label class="gos-form-label">Project Name *</label><input class="gos-form-input" name="projectName" required></div>
         <div class="gos-form-row">
-          <div class="gos-form-group"><label class="gos-form-label">Deadline</label><input class="gos-form-input" type="date" name="deadline"></div>
-          <div class="gos-form-group"><label class="gos-form-label">Budget (₱)</label><input class="gos-form-input" type="number" name="budget"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Start Date</label><input class="gos-form-input" type="date" name="startDate"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Start Time</label><input class="gos-form-input" type="time" name="startTime"></div>
         </div>
-        <div class="gos-form-group">
-          <label class="gos-form-label">Client</label>
-          <select class="gos-form-select" name="clientId">
-            <option value="">None</option>
-            ${(this.data.clients || []).map(c => `<option value="${c.clientId}">${c.clientName}</option>`).join('')}
-          </select>
+        <div class="gos-form-row">
+          <div class="gos-form-group"><label class="gos-form-label">Deadline Date</label><input class="gos-form-input" type="date" name="deadline"></div>
+          <div class="gos-form-group"><label class="gos-form-label">Deadline Time</label><input class="gos-form-input" type="time" name="deadlineTime"></div>
+        </div>
+        <div class="gos-form-row">
+          <div class="gos-form-group">
+            <label class="gos-form-label">Client</label>
+            <select class="gos-form-select" name="clientId">
+              <option value="">None</option>
+              ${(this.data.clients || []).map(c => `<option value="${c.clientId}">${c.clientName}</option>`).join('')}
+            </select>
+          </div>
+          <div class="gos-form-group"><label class="gos-form-label">Budget (₱)</label><input class="gos-form-input" type="number" name="budget"></div>
         </div>
       `;
       case 'clients': return `
@@ -3142,6 +4177,7 @@ class GeloGrowthOS {
           <div class="gos-form-group"><label class="gos-form-label">End Date</label><input class="gos-form-input" type="date" name="endDate"></div>
           <div class="gos-form-group"><label class="gos-form-label">Account Value (₱)</label><input class="gos-form-input" type="number" name="accountValue"></div>
         </div>
+        <div class="gos-form-group"><label class="gos-form-label">Client Notes</label><textarea class="gos-form-textarea" name="notes" rows="3"></textarea></div>
       `;
       case 'goals': return `
         <div class="gos-form-group"><label class="gos-form-label">Goal Name *</label><input class="gos-form-input" name="goalName" required></div>
@@ -3202,8 +4238,10 @@ class GeloGrowthOS {
     let newContact;
     let newOrg;
 
-    switch (this.currentView) {
-      case 'linkedin': {
+    const addTarget = this._addRecordTarget || this.currentView;
+    this._addRecordTarget = null;
+    switch (addTarget) {
+      case 'linkedin': { // falls through from switch(addTarget)
         const contactId = data.contactName;
         let orgId = '';
 
@@ -3273,6 +4311,9 @@ class GeloGrowthOS {
           lastInteractionAt: '',
           nextAction: data.nextAction || '',
           nextActionDate: data.nextActionDate || '',
+          followUpTime: data.followUpTime || '',
+          callDate: data.callDate || '',
+          callTime: data.callTime || '',
           convertedOpportunityId: '',
           ownerId: 'Gelo',
           notes: data.notes || '',
@@ -3354,6 +4395,9 @@ class GeloGrowthOS {
           proposalDate: '',
           nextAction: data.nextAction || '',
           nextActionDate: data.nextActionDate || '',
+          nextActionTime: data.nextActionTime || '',
+          callDate: data.callDate || '',
+          callTime: data.callTime || '',
           closeDate: '',
           outcomeReason: '',
           ownerId: 'Gelo',
@@ -3366,11 +4410,16 @@ class GeloGrowthOS {
           contentId: `SCC-${String((this.data.sccContent || []).length + 1).padStart(4, '0')}`,
           ...data,
           status: 'Idea',
+          brand: data.brand || 'Self Care Club',
+          platform: data.channel || data.platform || '',
+          caption: data.caption || data.cta || '',
           views: 0, comments: 0, saves: 0, replies: 0,
           repurposeFlag: 'FALSE',
           sourceId: '',
           ownerId: 'Gelo',
           publishedAt: '', publishedUrl: '', draftUrl: '', assetUrl: '',
+          createdAt: today,
+          updatedAt: today,
         };
         this.data.sccContent.push(newRecord);
         break;
@@ -3426,13 +4475,18 @@ class GeloGrowthOS {
         newRecord = {
           taskId: `T-${String((this.data.tasks || []).length + 1).padStart(4, '0')}`,
           title: data.title,
-          status: 'To Do',
+          status: this.taskColumns[0] || 'To Do',
           priority: data.priority || 'Normal',
           dueAt: data.dueAt || '',
+          dueTime: data.dueTime || '',
+          startDate: data.startDate || '',
+          startTime: data.startTime || '',
+          areaId: data.areaId || '',
           projectId: data.projectId || '',
           clientId: data.clientId || '',
           notes: data.notes || '',
           createdAt: today,
+          updatedAt: today,
         };
         if (!this.data.tasks) this.data.tasks = [];
         this.data.tasks.push(newRecord);
@@ -3442,8 +4496,13 @@ class GeloGrowthOS {
         newRecord = {
           projectId: `PRJ-${String((this.data.projects || []).length + 1).padStart(4, '0')}`,
           projectName: data.projectName,
+          status: data.status || 'Planning',
+          startDate: data.startDate || '',
+          startTime: data.startTime || '',
           deadline: data.deadline || '',
+          deadlineTime: data.deadlineTime || '',
           progress: 0,
+          areaId: data.areaId || '',
           budget: parseFloat(data.budget) || 0,
           clientId: data.clientId || '',
           createdAt: today,
@@ -3457,7 +4516,12 @@ class GeloGrowthOS {
         newRecord = {
           clientId: `CL-${String((this.data.clients || []).length + 1).padStart(4, '0')}`,
           clientName: data.clientName,
+          company: data.company || '',
+          status: data.status || 'Active',
+          sourceLeadId: data.sourceLeadId || data.leadId || '',
+          leadId: data.leadId || data.sourceLeadId || '',
           services: data.services || '',
+          startDate: data.startDate || today,
           endDate: data.endDate || '',
           accountValue: parseFloat(data.accountValue) || 0,
           createdAt: today,
@@ -3532,6 +4596,7 @@ class GeloGrowthOS {
 
     this.closeModal('add-modal');
     form.reset();
+    this._addRecordTarget = null;
 
     // Map relational display names locally (so that names show in lists instantly!)
     sheetsService._denormalize(this.data);
@@ -3541,42 +4606,77 @@ class GeloGrowthOS {
     this.showToast('Record added successfully!', 'success');
 
     // Write to Google Sheets in background (if connected)
-    if (this.sheetsConnected && newRecord) {
-      const tabMap = {
-        'linkedin': 'linkedinLeads',
-        'prime': 'primePipeline',
-        'scc': 'sccContent',
-        'calmera': 'calmeraOrders',
-        'tasks': 'tasks',
-        'projects': 'projects',
-        'clients': 'clients',
-        'goals': 'goals',
-        'habits': 'habits',
-        'learning': 'learning',
-        'notes': 'notes',
-        'sops': 'sops',
-      };
-      const tabKey = tabMap[this.currentView];
-      if (tabKey) {
-        // Sequentially write Contact -> Organization -> Main Record to keep Sheets relational database clean
-        const promises = [];
-        if (newContact) promises.push(sheetsService.appendRecord('contacts', newContact));
-        if (newOrg) promises.push(sheetsService.appendRecord('organizations', newOrg));
+    if (newRecord) {
+      if (this.sheetsConnected) {
+        const tabMap = {
+          'linkedin': 'linkedinLeads',
+          'prime': 'primePipeline',
+          'scc': 'sccContent',
+          'calmera': 'calmeraOrders',
+          'tasks': 'tasks',
+          'projects': 'projects',
+          'clients': 'clients',
+          'goals': 'goals',
+          'habits': 'habits',
+          'learning': 'learning',
+          'notes': 'notes',
+          'sops': 'sops',
+        };
+        const tabKey = tabMap[addTarget];
+        if (tabKey) {
+          this.updateTopbarSyncStatus('syncing');
+          // Sequentially write Contact -> Organization -> Main Record to keep Sheets relational database clean
+          const promises = [];
+          if (newContact) promises.push(sheetsService.appendRecord('contacts', newContact));
+          if (newOrg) promises.push(sheetsService.appendRecord('organizations', newOrg));
 
-        Promise.all(promises)
-          .then(() => {
-            return sheetsService.appendRecord(tabKey, newRecord);
-          })
-          .then((res) => {
-            if (res && res.rowsAfter !== undefined) {
-              newRecord._rowIndex = res.rowsAfter - 1;
-            }
-            this.showToast('📤 Saved to Google Sheets', 'success');
-          })
-          .catch(err => {
-            console.error('Sheet write failed:', err);
-            this.showToast('⚠️ Saved locally, but Sheet write failed.', 'warning');
-          });
+          Promise.all(promises)
+            .then(() => {
+              return sheetsService.appendRecord(tabKey, newRecord);
+            })
+            .then((res) => {
+              if (res && res.rowsAfter !== undefined) {
+                newRecord._rowIndex = res.rowsAfter - 1;
+              }
+              delete newRecord._syncStatus;
+              delete newRecord._syncError;
+              this.saveLocalData();
+              this.updateTopbarSyncStatus('synced');
+              this.showToast('📤 Saved to Google Sheets', 'success');
+              this.render(); // update badges
+            })
+            .catch(err => {
+              console.error('Sheet write failed:', err);
+              const userErr = this.getFriendlyErrorMessage(err);
+              newRecord._syncStatus = 'Pending Sync';
+              newRecord._syncError = userErr;
+              if (newContact) {
+                newContact._syncStatus = 'Pending Sync';
+                newContact._syncError = userErr;
+              }
+              if (newOrg) {
+                newOrg._syncStatus = 'Pending Sync';
+                newOrg._syncError = userErr;
+              }
+              this.saveLocalData();
+              this.updateTopbarSyncStatus('error');
+              this.showToast(`⚠️ Saved locally, but Sheet write failed: ${userErr}`, 'warning');
+              this.render(); // update badges
+            });
+        }
+      } else if (sheetsService.isConfigured()) {
+        newRecord._syncStatus = 'Pending Sync';
+        newRecord._syncError = 'Not connected to Google Sheets. Click retry in the details panel or check settings.';
+        if (newContact) {
+          newContact._syncStatus = 'Pending Sync';
+          newContact._syncError = 'Not connected to Google Sheets.';
+        }
+        if (newOrg) {
+          newOrg._syncStatus = 'Pending Sync';
+          newOrg._syncError = 'Not connected to Google Sheets.';
+        }
+        this.saveLocalData();
+        this.render();
       }
     }
   }
@@ -3609,13 +4709,33 @@ class GeloGrowthOS {
   toggleTask(taskId) {
     const task = this.data.tasks.find(t => t.taskId === taskId);
     if (task) {
-      task.status = task.status === 'Completed' ? 'Open' : 'Completed';
-      task.completedAt = task.status === 'Completed' ? getDemoToday() : '';
+      const firstStatus = this.taskColumns[0] || 'To Do';
+      const lastStatus = this.taskColumns[this.taskColumns.length - 1] || 'Completed';
+      const isCompleted = task.status === lastStatus;
+      task.status = isCompleted ? firstStatus : lastStatus;
+      task.completedAt = !isCompleted ? getDemoToday() : '';
       this.renderContent();
       this.showToast(
-        task.status === 'Completed' ? 'Task completed! ✅' : 'Task reopened',
-        task.status === 'Completed' ? 'success' : 'info'
+        !isCompleted ? 'Task completed! ✅' : 'Task reopened',
+        !isCompleted ? 'success' : 'info'
       );
+      if (this.sheetsConnected) {
+        if (task._rowIndex !== undefined) {
+          sheetsService.updateRecord('tasks', task._rowIndex, { status: task.status, completedAt: task.completedAt })
+            .catch(err => {
+              console.error('Failed to sync calendar task toggle:', err);
+              task._syncStatus = 'Pending Sync';
+              task._syncError = this.getFriendlyErrorMessage(err);
+              this.saveLocalData();
+              this.render();
+            });
+        } else {
+          task._syncStatus = 'Pending Sync';
+          task._syncError = 'Row index is undefined';
+          this.saveLocalData();
+          this.render();
+        }
+      }
     }
   }
 
@@ -3746,21 +4866,47 @@ class GeloGrowthOS {
 
   // ── Toast Notifications ─────────────────────────────────────
   showToast(message, type = 'info') {
+    // 1. Log to notifications array
+    const notif = {
+      id: Date.now(),
+      message,
+      type,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      read: false
+    };
+    if (!this.notifications) this.notifications = [];
+    this.notifications.unshift(notif);
+    if (this.notifications.length > 20) this.notifications.pop();
+    localStorage.setItem('gos_notifications_log', JSON.stringify(this.notifications));
+    this.updateNotificationsUI();
+
+    // 2. Render small minimalist toast pill in top-right
     const container = document.getElementById('toast-container');
     if (!container) return;
+
     const toast = document.createElement('div');
     toast.className = `gos-toast ${type}`;
     const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
     toast.innerHTML = `
       <span class="toast-icon">${icons[type] || 'ℹ️'}</span>
-      <span class="toast-text">${message}</span>
-      <button style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0 0 0 8px;font-size:16px;line-height:1" onclick="this.parentElement.remove()">×</button>
+      <span class="toast-text" title="${message}">${message}</span>
+      <button class="toast-close" onclick="this.parentElement.remove()">×</button>
     `;
     container.appendChild(toast);
-    setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.3s'; setTimeout(() => toast.remove(), 300); }, 3500);
+
+    setTimeout(() => {
+      toast.classList.add('toast-fade-out');
+      setTimeout(() => toast.remove(), 150);
+    }, 2800);
   }
 
   // ── Helpers ─────────────────────────────────────────────────
+  isTaskCompleted(task) {
+    if (!task) return false;
+    const completedStatus = (this.taskColumns && this.taskColumns.length) ? this.taskColumns[this.taskColumns.length - 1] : 'Completed';
+    return task.status === completedStatus;
+  }
+
   formatNumber(num) {
     if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
     if (num >= 1000) return (num / 1000).toFixed(num >= 10000 ? 0 : 1) + 'K';
@@ -3812,27 +4958,44 @@ class GeloGrowthOS {
     try {
       const sheetsData = await sheetsService.readAllData();
 
-      // Use Sheets data directly (empty arrays if a sheet tab is empty)
-      this.data = {
-        contacts: sheetsData.contacts || [],
-        organizations: sheetsData.organizations || [],
-        linkedinLeads: sheetsData.linkedinLeads || [],
-        primePipeline: sheetsData.primePipeline || [],
-        sccContent: sheetsData.sccContent || [],
-        calmeraOrders: sheetsData.calmeraOrders || [],
-        sourceAssets: sheetsData.sourceAssets || [],
-        repurposeOutputs: sheetsData.repurposeOutputs || [],
-        interactions: sheetsData.interactions || [],
-        tasks: sheetsData.tasks || [],
-        projects: sheetsData.projects || [],
-        clients: sheetsData.clients || [],
-        areas: sheetsData.areas || [],
-        goals: sheetsData.goals || [],
-        habits: sheetsData.habits || [],
-        learning: sheetsData.learning || [],
-        notes: sheetsData.notes || [],
-        sops: sheetsData.sops || [],
+      // Helper: only use Sheets data if it actually has rows.
+      // If Sheets returns empty (tab missing or no rows), keep locally-saved data instead.
+      const local = (() => {
+        try {
+          const raw = localStorage.getItem('gos_local_database');
+          return raw ? JSON.parse(raw) : {};
+        } catch(e) { return {}; }
+      })();
+
+      const mergeTab = (key, sheetsRows) => {
+        if (sheetsRows && sheetsRows.length > 0) {
+          return this.mergeLocalPendingRecords(key, sheetsRows);
+        }
+        // Sheets returned nothing — preserve locally-saved records to avoid data loss
+        return local[key] || [];
       };
+
+      this.data = {
+        contacts:        mergeTab('contacts',        sheetsData.contacts || []),
+        organizations:   mergeTab('organizations',   sheetsData.organizations || []),
+        linkedinLeads:   mergeTab('linkedinLeads',   sheetsData.linkedinLeads || []),
+        primePipeline:   mergeTab('primePipeline',   sheetsData.primePipeline || []),
+        sccContent:      mergeTab('sccContent',      sheetsData.sccContent || []),
+        calmeraOrders:   mergeTab('calmeraOrders',   sheetsData.calmeraOrders || []),
+        sourceAssets:    mergeTab('sourceAssets',    sheetsData.sourceAssets || []),
+        repurposeOutputs:mergeTab('repurposeOutputs',sheetsData.repurposeOutputs || []),
+        interactions:    mergeTab('interactions',    sheetsData.interactions || []),
+        tasks:           mergeTab('tasks',           sheetsData.tasks || []),
+        projects:        mergeTab('projects',        sheetsData.projects || []),
+        clients:         mergeTab('clients',         sheetsData.clients || []),
+        areas:           mergeTab('areas',           sheetsData.areas || []),
+        goals:           mergeTab('goals',           sheetsData.goals || []),
+        habits:          mergeTab('habits',          sheetsData.habits || []),
+        learning:        mergeTab('learning',        sheetsData.learning || []),
+        notes:           mergeTab('notes',           sheetsData.notes || []),
+        sops:            mergeTab('sops',            sheetsData.sops || []),
+      };
+
 
       this.sheetsConnected = true;
       localStorage.setItem('gos_sheets_connected', 'true');
@@ -4039,7 +5202,8 @@ class GeloGrowthOS {
   isEventOverdue(ev) {
     const today = getDemoToday();
     const isBefore = ev.date < today;
-    const isCompleted = ['Done', 'Completed', 'Confirmed', 'Closed', 'Won'].includes(ev.status);
+    const completedStatus = this.taskColumns ? (this.taskColumns[this.taskColumns.length - 1] || 'Completed') : 'Completed';
+    const isCompleted = ['Done', 'Completed', 'Confirmed', 'Closed', 'Won', completedStatus].includes(ev.status);
     return isBefore && !isCompleted;
   }
 
@@ -4077,10 +5241,7 @@ class GeloGrowthOS {
       filtered = filtered.filter(ev => this.isEventOverdue(ev));
     }
 
-    // 2. Category filter (this._calCatFilter)
-    if (this._calCatFilter !== 'all') {
-      filtered = filtered.filter(ev => ev.category === this._calCatFilter);
-    }
+    // 2. Category filter — removed
 
     // 3. Event Type filter (this._calTypeFilter)
     if (this._calTypeFilter !== 'all') {
@@ -4173,11 +5334,6 @@ class GeloGrowthOS {
       { id: 'orders', label: 'Order Tasks' }
     ];
 
-    const catFilters = [
-      { id: 'all', label: 'All Categories' },
-      ...settingsEngine.getAllCategories().map(c => ({ id: c.id, label: c.label }))
-    ];
-
     const priFilters = [
       { id: 'all', label: 'All Priorities' },
       { id: 'High', label: 'High' },
@@ -4198,9 +5354,6 @@ class GeloGrowthOS {
         </select>
         <select class="topbar-filter" onchange="app._setCalTypeFilter(this.value)">
           ${typeFilters.map(f => `<option value="${f.id}" ${this._calTypeFilter === f.id ? 'selected' : ''}>${f.label}</option>`).join('')}
-        </select>
-        <select class="topbar-filter" onchange="app._setCalCatFilter(this.value)">
-          ${catFilters.map(f => `<option value="${f.id}" ${this._calCatFilter === f.id ? 'selected' : ''}>${f.label}</option>`).join('')}
         </select>
         <select class="topbar-filter" onchange="app._setCalPriorityFilter(this.value)">
           ${priFilters.map(f => `<option value="${f.id}" ${this._calPriorityFilter === f.id ? 'selected' : ''}>${f.label}</option>`).join('')}
@@ -4592,10 +5745,7 @@ class GeloGrowthOS {
     this.renderContent();
   }
 
-  _setCalCatFilter(cat) {
-    this._calCatFilter = cat;
-    this.renderContent();
-  }
+
 
   _setCalPriorityFilter(pri) {
     this._calPriorityFilter = pri;
@@ -4786,20 +5936,38 @@ class GeloGrowthOS {
               } else {
                 // If it was created locally but row index wasn't set, append it
                 const res = await sheetsService.appendRecord('primePipeline', opp);
-                opp._rowIndex = res.rowIndex;
+                opp._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
               }
             }
-            await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+            if (lead._rowIndex !== undefined) {
+              await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+            } else {
+              const res = await sheetsService.appendRecord('linkedinLeads', lead);
+              lead._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
+            }
+            delete lead._syncStatus;
+            delete lead._syncError;
+            delete opp._syncStatus;
+            delete opp._syncError;
+            this.saveLocalData();
             this.showToast('📤 Lead & Pipeline Synced to Google Sheets!', 'success');
             this.syncStatus = 'Synced';
             this.syncError = null;
             this.lastSynced = new Date().toLocaleString();
             localStorage.setItem('gos_last_synced', this.lastSynced);
+            this.updateTopbarSyncStatus('synced');
           } catch (err) {
             console.error('Failed to sync opportunity in syncLeadAndOpportunity:', err);
-            this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
+            const userErr = this.getFriendlyErrorMessage(err);
+            lead._syncStatus = 'Pending Sync';
+            lead._syncError = userErr;
+            opp._syncStatus = 'Pending Sync';
+            opp._syncError = userErr;
+            this.saveLocalData();
+            this.showToast(`⚠️ Sheet sync failed: ${userErr}`, 'warning');
             this.syncStatus = 'Error';
-            this.syncError = err.message || err;
+            this.syncError = userErr;
+            this.updateTopbarSyncStatus('error');
           }
         }
       } else {
@@ -4811,37 +5979,74 @@ class GeloGrowthOS {
             opp.dealStatus = 'Lost';
             opp.closeDate = today;
           }
-          if (this.sheetsConnected && opp._rowIndex !== undefined) {
+          if (this.sheetsConnected) {
             try {
-              await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
-              await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+              if (opp._rowIndex !== undefined) {
+                await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
+              } else {
+                const res = await sheetsService.appendRecord('primePipeline', opp);
+                opp._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
+              }
+              if (lead._rowIndex !== undefined) {
+                await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+              } else {
+                const res = await sheetsService.appendRecord('linkedinLeads', lead);
+                lead._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
+              }
+              delete lead._syncStatus;
+              delete lead._syncError;
+              delete opp._syncStatus;
+              delete opp._syncError;
+              this.saveLocalData();
               this.showToast('📤 Lead & Pipeline Synced to Google Sheets', 'success');
               this.syncStatus = 'Synced';
               this.syncError = null;
               this.lastSynced = new Date().toLocaleString();
               localStorage.setItem('gos_last_synced', this.lastSynced);
+              this.updateTopbarSyncStatus('synced');
             } catch(err) {
               console.error('Failed to sync opportunity in non-ready stage:', err);
-              this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
+              const userErr = this.getFriendlyErrorMessage(err);
+              lead._syncStatus = 'Pending Sync';
+              lead._syncError = userErr;
+              opp._syncStatus = 'Pending Sync';
+              opp._syncError = userErr;
+              this.saveLocalData();
+              this.showToast(`⚠️ Sheet sync failed: ${userErr}`, 'warning');
               this.syncStatus = 'Error';
-              this.syncError = err.message || err;
+              this.syncError = userErr;
+              this.updateTopbarSyncStatus('error');
             }
           }
         } else {
           // If no opportunity exists, but sheets are connected, we must still update the lead record in Google Sheets!
-          if (this.sheetsConnected && lead._rowIndex !== undefined) {
+          if (this.sheetsConnected) {
             try {
-              await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+              if (lead._rowIndex !== undefined) {
+                await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+              } else {
+                const res = await sheetsService.appendRecord('linkedinLeads', lead);
+                lead._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
+              }
+              delete lead._syncStatus;
+              delete lead._syncError;
+              this.saveLocalData();
               this.showToast('📤 Lead Saved to Google Sheets', 'success');
               this.syncStatus = 'Synced';
               this.syncError = null;
               this.lastSynced = new Date().toLocaleString();
               localStorage.setItem('gos_last_synced', this.lastSynced);
+              this.updateTopbarSyncStatus('synced');
             } catch(err) {
               console.error('Failed to sync lead in basic stage:', err);
-              this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
+              const userErr = this.getFriendlyErrorMessage(err);
+              lead._syncStatus = 'Pending Sync';
+              lead._syncError = userErr;
+              this.saveLocalData();
+              this.showToast(`⚠️ Sheet sync failed: ${userErr}`, 'warning');
               this.syncStatus = 'Error';
-              this.syncError = err.message || err;
+              this.syncError = userErr;
+              this.updateTopbarSyncStatus('error');
             }
           }
         }
@@ -4877,18 +6082,41 @@ class GeloGrowthOS {
           
           if (this.sheetsConnected) {
             try {
-              await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
-              await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
+              if (lead._rowIndex !== undefined) {
+                await sheetsService.updateRecord('linkedinLeads', lead._rowIndex, lead);
+              } else {
+                const res = await sheetsService.appendRecord('linkedinLeads', lead);
+                lead._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
+              }
+              if (opp._rowIndex !== undefined) {
+                await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
+              } else {
+                const res = await sheetsService.appendRecord('primePipeline', opp);
+                opp._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
+              }
+              delete lead._syncStatus;
+              delete lead._syncError;
+              delete opp._syncStatus;
+              delete opp._syncError;
+              this.saveLocalData();
               this.showToast('📤 Lead & Pipeline Synced to Google Sheets', 'success');
               this.syncStatus = 'Synced';
               this.syncError = null;
               this.lastSynced = new Date().toLocaleString();
               localStorage.setItem('gos_last_synced', this.lastSynced);
+              this.updateTopbarSyncStatus('synced');
             } catch (err) {
               console.error('Failed to sync lead in syncLeadAndOpportunity:', err);
-              this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
+              const userErr = this.getFriendlyErrorMessage(err);
+              lead._syncStatus = 'Pending Sync';
+              lead._syncError = userErr;
+              opp._syncStatus = 'Pending Sync';
+              opp._syncError = userErr;
+              this.saveLocalData();
+              this.showToast(`⚠️ Sheet sync failed: ${userErr}`, 'warning');
               this.syncStatus = 'Error';
-              this.syncError = err.message || err;
+              this.syncError = userErr;
+              this.updateTopbarSyncStatus('error');
             }
           }
           return;
@@ -4896,19 +6124,33 @@ class GeloGrowthOS {
       }
 
       // Fallback: If no connected lead (or lead not found), still save the opportunity itself to Google Sheets
-      if (this.sheetsConnected && opp._rowIndex !== undefined) {
+      if (this.sheetsConnected) {
         try {
-          await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
+          if (opp._rowIndex !== undefined) {
+            await sheetsService.updateRecord('primePipeline', opp._rowIndex, opp);
+          } else {
+            const res = await sheetsService.appendRecord('primePipeline', opp);
+            opp._rowIndex = res.rowIndex || (res.rowsAfter !== undefined ? res.rowsAfter - 1 : undefined);
+          }
+          delete opp._syncStatus;
+          delete opp._syncError;
+          this.saveLocalData();
           this.showToast('📤 Opportunity Saved to Google Sheets', 'success');
           this.syncStatus = 'Synced';
           this.syncError = null;
           this.lastSynced = new Date().toLocaleString();
           localStorage.setItem('gos_last_synced', this.lastSynced);
+          this.updateTopbarSyncStatus('synced');
         } catch (err) {
           console.error('Failed to sync opportunity in syncLeadAndOpportunity:', err);
-          this.showToast('⚠️ Sheet sync failed. Saved locally.', 'warning');
+          const userErr = this.getFriendlyErrorMessage(err);
+          opp._syncStatus = 'Pending Sync';
+          opp._syncError = userErr;
+          this.saveLocalData();
+          this.showToast(`⚠️ Sheet sync failed: ${userErr}`, 'warning');
           this.syncStatus = 'Error';
-          this.syncError = err.message || err;
+          this.syncError = userErr;
+          this.updateTopbarSyncStatus('error');
         }
       }
     }
@@ -4965,11 +6207,19 @@ class GeloGrowthOS {
 
   async updateRecordField(viewType, id, fields) {
     const dataMap = {
-      'linkedin': { data: this.data.linkedinLeads, idKey: 'leadId', tabKey: 'linkedinLeads' },
-      'prime': { data: this.data.primePipeline, idKey: 'opportunityId', tabKey: 'primePipeline' },
-      'scc': { data: this.data.sccContent, idKey: 'contentId', tabKey: 'sccContent' },
-      'calmera': { data: this.data.calmeraOrders, idKey: 'orderId', tabKey: 'calmeraOrders' },
-      'tasks': { data: this.data.tasks, idKey: 'taskId', tabKey: 'tasks' },
+      'linkedin':    { data: this.data.linkedinLeads,    idKey: 'leadId',       tabKey: 'linkedinLeads' },
+      'prime':       { data: this.data.primePipeline,    idKey: 'opportunityId', tabKey: 'primePipeline' },
+      'scc':         { data: this.data.sccContent,       idKey: 'contentId',     tabKey: 'sccContent' },
+      'calmera':     { data: this.data.calmeraOrders,    idKey: 'orderId',       tabKey: 'calmeraOrders' },
+      'tasks':       { data: this.data.tasks,            idKey: 'taskId',        tabKey: 'tasks' },
+      'projects':    { data: this.data.projects,         idKey: 'projectId',     tabKey: 'projects' },
+      'clients':     { data: this.data.clients,          idKey: 'clientId',      tabKey: 'clients' },
+      'goals':       { data: this.data.goals,            idKey: 'goalId',        tabKey: 'goals' },
+      'habits':      { data: this.data.habits,           idKey: 'habitId',       tabKey: 'habits' },
+      'learning':    { data: this.data.learning,         idKey: 'learningId',    tabKey: 'learning' },
+      'notes':       { data: this.data.notes,            idKey: 'noteId',        tabKey: 'notes' },
+      'sops':        { data: this.data.sops,             idKey: 'sopId',         tabKey: 'sops' },
+      'repurposing': { data: this.data.repurposeOutputs, idKey: 'outputId',      tabKey: 'repurposeOutputs' },
     };
 
     const config = dataMap[viewType];
@@ -5247,7 +6497,6 @@ class GeloGrowthOS {
       { id:'workspace',  label:'Workspace' },
       { id:'profile',    label:'Profile'   },
       { id:'modules',    label:'Modules'   },
-      { id:'categories', label:'Categories'},
       { id:'sheets',     label:'Sheets'    },
       { id:'appearance', label:'Appearance'},
     ];
@@ -5370,34 +6619,6 @@ class GeloGrowthOS {
               }).join('')}
               <div style="margin-top:16px">
                 <button class="btn-primary" onclick="app._saveModuleSettings()">Save Module Names</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Categories -->
-        <div class="settings-section ${tab === 'categories' ? 'active' : ''}">
-          <div class="settings-card">
-            <div class="settings-card-header">
-              <div>
-                <div class="settings-card-title">Categories</div>
-                <div class="settings-card-desc">Categories help you organize leads, content, and orders by business area.</div>
-              </div>
-              <button class="btn-secondary btn-sm" onclick="app._addCategory()">+ Add Category</button>
-            </div>
-            <div class="settings-card-body">
-              <div id="category-list">
-                ${settings.categories.map((cat, idx) => `
-                  <div class="category-item" id="cat-item-${idx}">
-                    <div class="category-color-dot" style="background:${cat.color}"></div>
-                    <input class="category-label-input" id="cat-label-${idx}" value="${this._esc(cat.label)}">
-                    <input type="color" value="${cat.color}" style="width:32px;height:32px;border:none;background:none;cursor:pointer;border-radius:var(--radius-sm)" onchange="app._setCategoryColor(${idx}, this.value)">
-                    <button class="btn-ghost btn-sm btn-icon" onclick="app._deleteCategory(${idx})" title="Delete">🗑️</button>
-                  </div>
-                `).join('')}
-              </div>
-              <div style="margin-top:16px">
-                <button class="btn-primary" onclick="app._saveCategorySettings()">Save Categories</button>
               </div>
             </div>
           </div>
@@ -5626,41 +6847,6 @@ class GeloGrowthOS {
     this.buildNavigation();
   }
 
-  _addCategory() {
-    const settings = settingsEngine.get();
-    const colors   = ['#6366f1','#10b981','#3b82f6','#f59e0b','#ec4899','#eab308','#22d3ee','#a855f7'];
-    settings.categories.push({
-      id:    `cat-${Date.now()}`,
-      label: 'New Category',
-      color: colors[settings.categories.length % colors.length],
-    });
-    settingsEngine.save(settings);
-    this.renderContent();
-  }
-
-  _setCategoryColor(idx, color) {
-    const settings = settingsEngine.get();
-    if (settings.categories[idx]) settings.categories[idx].color = color;
-    settingsEngine.save(settings);
-  }
-
-  _deleteCategory(idx) {
-    const settings = settingsEngine.get();
-    settings.categories.splice(idx, 1);
-    settingsEngine.save(settings);
-    this.renderContent();
-  }
-
-  _saveCategorySettings() {
-    const settings = settingsEngine.get();
-    settings.categories.forEach((cat, idx) => {
-      const el = document.getElementById(`cat-label-${idx}`);
-      if (el && el.value.trim()) cat.label = el.value.trim();
-    });
-    settingsEngine.save(settings);
-    this.showToast('Categories saved!', 'success');
-  }
-
   async _saveAndTestSheets() {
     const settings   = settingsEngine.get();
     const url        = document.getElementById('set-webAppUrl')?.value.trim();
@@ -5833,8 +7019,8 @@ class GeloGrowthOS {
           ` : `
             <ul class="gos-task-list">
               ${tasks.map(t => `
-                <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}">
-                  <input type="checkbox" class="gos-task-checkbox" ${t.status === 'Completed' ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
+                <li class="gos-task-item ${this.isTaskCompleted(t) ? 'completed' : ''}">
+                  <input type="checkbox" class="gos-task-checkbox" ${this.isTaskCompleted(t) ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
                   <div class="gos-task-info" onclick="app.openTaskPanel('${t.taskId}')" style="flex:1">
                     <span class="gos-task-title">${this._esc(t.title)}</span>
                     <div class="gos-task-meta">
@@ -5953,11 +7139,25 @@ class GeloGrowthOS {
     const task = this.data.tasks.find(t => t.taskId === taskId);
     if (!task) return;
     if (type === 'task') {
-      task.status = 'To Do';
-      this.showToast('Converted inbox item to To Do Task!', 'success');
+      task.status = this.taskColumns[0] || 'To Do';
+      this.showToast(`Converted inbox item to ${task.status} Task!`, 'success');
       this.render();
-      if (this.sheetsConnected && task._rowIndex !== undefined) {
-        sheetsService.updateRecord('tasks', task._rowIndex, task);
+      if (this.sheetsConnected) {
+        if (task._rowIndex !== undefined) {
+          sheetsService.updateRecord('tasks', task._rowIndex, task)
+            .catch(err => {
+              console.error('Failed to sync inbox task conversion:', err);
+              task._syncStatus = 'Pending Sync';
+              task._syncError = this.getFriendlyErrorMessage(err);
+              this.saveLocalData();
+              this.render();
+            });
+        } else {
+          task._syncStatus = 'Pending Sync';
+          task._syncError = 'Row index is undefined';
+          this.saveLocalData();
+          this.render();
+        }
       }
     } else if (type === 'project') {
       this.data.tasks = this.data.tasks.filter(t => t.taskId !== taskId);
@@ -5975,8 +7175,17 @@ class GeloGrowthOS {
       this.render();
       if (this.sheetsConnected) {
         sheetsService.appendRecord('projects', newProj)
-          .then(() => {
-            if (task._rowIndex !== undefined) sheetsService.deleteRecord('tasks', task._rowIndex);
+          .then(res => {
+            if (res && res.rowsAfter !== undefined) newProj._rowIndex = res.rowsAfter - 1;
+            if (task._rowIndex !== undefined) return sheetsService.deleteRecord('tasks', task._rowIndex);
+          })
+          .catch(err => {
+            console.error('Failed to sync inbox project conversion:', err);
+            const userErr = this.getFriendlyErrorMessage(err);
+            newProj._syncStatus = 'Pending Sync';
+            newProj._syncError = userErr;
+            this.saveLocalData();
+            this.render();
           });
       }
     } else if (type === 'note') {
@@ -5994,8 +7203,17 @@ class GeloGrowthOS {
       this.render();
       if (this.sheetsConnected) {
         sheetsService.appendRecord('notes', newNote)
-          .then(() => {
-            if (task._rowIndex !== undefined) sheetsService.deleteRecord('tasks', task._rowIndex);
+          .then(res => {
+            if (res && res.rowsAfter !== undefined) newNote._rowIndex = res.rowsAfter - 1;
+            if (task._rowIndex !== undefined) return sheetsService.deleteRecord('tasks', task._rowIndex);
+          })
+          .catch(err => {
+            console.error('Failed to sync inbox note conversion:', err);
+            const userErr = this.getFriendlyErrorMessage(err);
+            newNote._syncStatus = 'Pending Sync';
+            newNote._syncError = userErr;
+            this.saveLocalData();
+            this.render();
           });
       }
     }
@@ -6035,11 +7253,9 @@ class GeloGrowthOS {
           <label class="filter-label">Status</label>
           <select class="filter-select" onchange="app.setTaskFilter('status', this.value)">
             <option value="all" ${this.taskFilters.status === 'all' ? 'selected' : ''}>All Statuses</option>
-            <option value="To Do" ${this.taskFilters.status === 'To Do' ? 'selected' : ''}>To Do</option>
-            <option value="In Progress" ${this.taskFilters.status === 'In Progress' ? 'selected' : ''}>In Progress</option>
-            <option value="Waiting" ${this.taskFilters.status === 'Waiting' ? 'selected' : ''}>Waiting</option>
-            <option value="Review" ${this.taskFilters.status === 'Review' ? 'selected' : ''}>Review</option>
-            <option value="Completed" ${this.taskFilters.status === 'Completed' ? 'selected' : ''}>Completed</option>
+            ${(this.taskColumns || ['To Do', 'In Progress', 'Waiting', 'Review', 'Completed']).map(opt => `
+              <option value="${opt}" ${this.taskFilters.status === opt ? 'selected' : ''}>${opt}</option>
+            `).join('')}
           </select>
         </div>
         <div class="filter-group">
@@ -6081,10 +7297,10 @@ class GeloGrowthOS {
                 ${filtered.map(t => {
                   const proj = projects.find(p => p.projectId === t.projectId);
                   return `
-                    <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}">
-                      <input type="checkbox" class="gos-task-checkbox" ${t.status === 'Completed' ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
+                    <li class="gos-task-item ${this.isTaskCompleted(t) ? 'completed' : ''}">
+                      <input type="checkbox" class="gos-task-checkbox" ${this.isTaskCompleted(t) ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
                       <div class="gos-task-info" onclick="app.openTaskPanel('${t.taskId}')" style="flex:1">
-                        <span class="gos-task-title">${this._esc(t.title)}</span>
+                        <span class="gos-task-title">${this._esc(t.title)} ${this.renderSyncBadgeInline('tasks', t.taskId, t)}</span>
                         <div class="gos-task-meta">
                           <span class="${t.dueAt < todayStr && t.status !== 'Completed' ? 'text-red font-bold' : ''}">Due ${t.dueAt || 'No Date'}</span>
                           ${this.renderBadge(t.priority)}
@@ -6101,20 +7317,23 @@ class GeloGrowthOS {
         </div>
       ` : `
         <div class="kanban-board">
-          ${['To Do', 'In Progress', 'Waiting', 'Review', 'Completed'].map(colStatus => {
+          ${(this.taskColumns || ['To Do', 'In Progress', 'Waiting', 'Review', 'Completed']).map(colStatus => {
             const colTasks = filtered.filter(t => t.status === colStatus);
             return `
               <div class="kanban-column" id="kanban-col-${colStatus.replace(' ', '-')}" ondragover="event.preventDefault()" ondrop="app.handleTaskDrop(event, '${colStatus}')">
                 <div class="kanban-column-header">
-                  <span class="kanban-column-title">${colStatus}</span>
-                  <span class="kanban-column-count">${colTasks.length}</span>
+                  <span class="kanban-column-title" contenteditable="true" onblur="app.renameKanbanColumn('${colStatus}', this.textContent)" onkeydown="if(event.key === 'Enter') { event.preventDefault(); this.blur(); }">${colStatus}</span>
+                  <div class="kanban-column-header-right" style="display:flex; align-items:center; gap:8px;">
+                    <span class="kanban-column-count">${colTasks.length}</span>
+                    <button class="btn-delete-kanban-col" onclick="app.deleteKanbanColumn('${colStatus}', event)" title="Delete section">✕</button>
+                  </div>
                 </div>
                 <div class="kanban-cards-container">
                   ${colTasks.map(t => {
                     const proj = projects.find(p => p.projectId === t.projectId);
                     return `
                       <div class="kanban-card" draggable="true" ondragstart="app.handleTaskDragStart(event, '${t.taskId}')" onclick="app.openTaskPanel('${t.taskId}')">
-                        <div class="kanban-card-title">${this._esc(t.title)}</div>
+                        <div class="kanban-card-title">${this._esc(t.title)} ${this.renderSyncBadgeInline('tasks', t.taskId, t)}</div>
                         <div class="kanban-card-meta">
                           <span>${t.dueAt || 'No Date'}</span>
                           ${this.renderBadge(t.priority)}
@@ -6127,6 +7346,13 @@ class GeloGrowthOS {
               </div>
             `;
           }).join('')}
+          <div class="kanban-column add-column-placeholder" id="kanban-add-col-placeholder">
+            <button class="kanban-add-col-btn" onclick="app.promptAddKanbanColumn()" title="Add a new section">
+              <span class="plus-icon">+</span>
+              <span>Add Section</span>
+            </button>
+          </div>
+
         </div>
       `}
     `;
@@ -6144,8 +7370,22 @@ class GeloGrowthOS {
       task.status = status;
       this.showToast(`Updated task status to ${status}`, 'success');
       this.render();
-      if (this.sheetsConnected && task._rowIndex !== undefined) {
-        sheetsService.updateRecord('tasks', task._rowIndex, { status });
+      if (this.sheetsConnected) {
+        if (task._rowIndex !== undefined) {
+          sheetsService.updateRecord('tasks', task._rowIndex, { status })
+            .catch(err => {
+              console.error('Task status drag-drop sync failed:', err);
+              task._syncStatus = 'Pending Sync';
+              task._syncError = this.getFriendlyErrorMessage(err);
+              this.saveLocalData();
+              this.render();
+            });
+        } else {
+          task._syncStatus = 'Pending Sync';
+          task._syncError = 'Row index is undefined';
+          this.saveLocalData();
+          this.render();
+        }
       }
     }
   }
@@ -6163,7 +7403,9 @@ class GeloGrowthOS {
   toggleTaskStatus(taskId) {
     const task = this.data.tasks.find(t => t.taskId === taskId);
     if (task) {
-      task.status = task.status === 'Completed' ? 'To Do' : 'Completed';
+      const firstStatus = this.taskColumns[0] || 'To Do';
+      const lastStatus = this.taskColumns[this.taskColumns.length - 1] || 'Completed';
+      task.status = task.status === lastStatus ? firstStatus : lastStatus;
       this.showToast(`Task status updated!`, 'success');
       this.render();
       if (this.sheetsConnected && task._rowIndex !== undefined) {
@@ -6172,15 +7414,144 @@ class GeloGrowthOS {
     }
   }
 
+  renameKanbanColumn(oldName, newName) {
+    if (!newName) {
+      this.render();
+      return;
+    }
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) {
+      this.render();
+      return;
+    }
+    if (this.taskColumns.includes(trimmed)) {
+      this.showToast('Section name already exists!', 'warning');
+      this.render();
+      return;
+    }
+    
+    // Update columns list
+    const index = this.taskColumns.indexOf(oldName);
+    if (index !== -1) {
+      this.taskColumns[index] = trimmed;
+      localStorage.setItem('gos_task_columns', JSON.stringify(this.taskColumns));
+    }
+    
+    // Update all tasks that had the old status to the new status
+    let updatedCount = 0;
+    if (this.data && this.data.tasks) {
+      this.data.tasks.forEach(task => {
+        if (task.status === oldName) {
+          task.status = trimmed;
+          updatedCount++;
+          if (this.sheetsConnected && task._rowIndex !== undefined) {
+            sheetsService.updateRecord('tasks', task._rowIndex, { status: task.status });
+          }
+        }
+      });
+      if (updatedCount > 0) {
+        this.saveLocalData();
+      }
+    }
+    
+    this.showToast(`Renamed section to "${trimmed}"`, 'success');
+    this.render();
+  }
+
+  addKanbanColumn(name) {
+    if (!name) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (this.taskColumns.includes(trimmed)) {
+      this.showToast('Section already exists!', 'warning');
+      return;
+    }
+    this.taskColumns.push(trimmed);
+    localStorage.setItem('gos_task_columns', JSON.stringify(this.taskColumns));
+    this.showToast(`Added section "${trimmed}"`, 'success');
+    this.render();
+  }
+
+  promptAddKanbanColumn() {
+    const placeholder = document.getElementById('kanban-add-col-placeholder');
+    if (!placeholder) return;
+
+    placeholder.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:8px;padding:12px;width:100%;">
+        <input
+          id="kanban-new-col-input"
+          class="gos-form-input"
+          placeholder="Section name..."
+          maxlength="40"
+          autofocus
+          style="width:100%;font-size:13px;"
+          onkeydown="if(event.key==='Enter'){app.confirmAddKanbanColumn();}else if(event.key==='Escape'){app.render();}"
+        >
+        <div style="display:flex;gap:6px;">
+          <button class="btn-primary btn-sm" style="flex:1" onclick="app.confirmAddKanbanColumn()">Add</button>
+          <button class="btn-ghost btn-sm" style="flex:1" onclick="app.render()">Cancel</button>
+        </div>
+      </div>
+    `;
+    const input = document.getElementById('kanban-new-col-input');
+    if (input) { input.focus(); }
+  }
+
+  confirmAddKanbanColumn() {
+    const input = document.getElementById('kanban-new-col-input');
+    if (!input) return;
+    this.addKanbanColumn(input.value);
+  }
+
+
+  deleteKanbanColumn(name, event) {
+    if (event) event.stopPropagation();
+    if (this.taskColumns.length <= 1) {
+      this.showToast('You must have at least one Kanban section!', 'warning');
+      return;
+    }
+    const fallback = this.taskColumns[0] === name ? this.taskColumns[1] : this.taskColumns[0];
+    this.showConfirm(
+      'Delete Section',
+      `Are you sure you want to delete the section "${name}"? Tasks in this section will be moved to "${fallback}".`,
+      'Delete',
+      () => {
+        // Remove column
+        this.taskColumns = this.taskColumns.filter(c => c !== name);
+        localStorage.setItem('gos_task_columns', JSON.stringify(this.taskColumns));
+        
+        // Move tasks
+        let movedCount = 0;
+        if (this.data && this.data.tasks) {
+          this.data.tasks.forEach(task => {
+            if (task.status === name) {
+              task.status = fallback;
+              movedCount++;
+              if (this.sheetsConnected && task._rowIndex !== undefined) {
+                sheetsService.updateRecord('tasks', task._rowIndex, { status: task.status });
+              }
+            }
+          });
+          if (movedCount > 0) {
+            this.saveLocalData();
+          }
+        }
+        
+        this.showToast(`Deleted section "${name}"`, 'success');
+        this.render();
+      }
+    );
+  }
+
   deleteTask(taskId) {
     const task = this.data.tasks.find(t => t.taskId === taskId);
     if (task) {
-      this.data.tasks = this.data.tasks.filter(t => t.taskId !== taskId);
-      this.showToast('Task deleted successfully.', 'info');
-      this.render();
-      if (this.sheetsConnected && task._rowIndex !== undefined) {
-        sheetsService.deleteRecord('tasks', task._rowIndex);
-      }
+      this.showConfirm(
+        'Delete Task',
+        `Are you sure you want to permanently delete task "${task.title || ''}"? This will also delete its row in Google Sheets.`,
+        '🗑️ Delete',
+        () => this._doDeleteRecord('tasks', task)
+      );
     }
   }
 
@@ -6211,7 +7582,7 @@ class GeloGrowthOS {
           </div>
         ` : projects.map(p => {
           const linkedTasks = tasks.filter(t => t.projectId === p.projectId);
-          const completedTasks = linkedTasks.filter(t => t.status === 'Completed');
+          const completedTasks = linkedTasks.filter(t => this.isTaskCompleted(t));
           const calculatedProgress = linkedTasks.length ? Math.round((completedTasks.length / linkedTasks.length) * 100) : 0;
           const displayProgress = p.progress !== undefined ? p.progress : calculatedProgress;
           const client = clients.find(c => c.clientId === p.clientId);
@@ -6221,7 +7592,10 @@ class GeloGrowthOS {
               <div>
                 <div class="sop-title">${this._esc(p.projectName)}</div>
                 ${client ? `<div class="note-meta" style="margin-bottom:8px">Client: ${this._esc(client.clientName)}</div>` : ''}
-                <div class="note-meta">Deadline: ${p.deadline || 'No Deadline'}</div>
+                <div class="note-meta" style="display:flex; justify-content:space-between; align-items:center;">
+                  <span>Deadline: ${p.deadline || 'No Deadline'}</span>
+                  ${this.renderSyncBadgeInline('projects', p.projectId, p)}
+                </div>
               </div>
               <div>
                 <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:12px; color:var(--text-muted)">
@@ -6250,12 +7624,12 @@ class GeloGrowthOS {
   deleteProject(projectId) {
     const proj = this.data.projects.find(p => p.projectId === projectId);
     if (proj) {
-      this.data.projects = this.data.projects.filter(p => p.projectId !== projectId);
-      this.showToast('Project deleted.', 'info');
-      this.render();
-      if (this.sheetsConnected && proj._rowIndex !== undefined) {
-        sheetsService.deleteRecord('projects', proj._rowIndex);
-      }
+      this.showConfirm(
+        'Delete Project',
+        `Are you sure you want to permanently delete project "${proj.projectName || ''}"? This will also delete its row in Google Sheets.`,
+        '🗑️ Delete',
+        () => this._doDeleteRecord('projects', proj)
+      );
     }
   }
 
@@ -6320,7 +7694,7 @@ class GeloGrowthOS {
       this.showToast('Client record deleted.', 'info');
       this.render();
       if (this.sheetsConnected && client._rowIndex !== undefined) {
-        sheetsService.deleteRecord('clients', client._rowIndex);
+        sheetsService.deleteRecord('clients', client._rowIndex).catch(err => console.error('Delete client failed:', err));
       }
     }
   }
@@ -6346,8 +7720,8 @@ class GeloGrowthOS {
             ` : `
               <ul class="gos-task-list">
                 ${weeklySync.map(t => `
-                  <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}">
-                    <input type="checkbox" class="gos-task-checkbox" ${t.status === 'Completed' ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
+                  <li class="gos-task-item ${this.isTaskCompleted(t) ? 'completed' : ''}">
+                    <input type="checkbox" class="gos-task-checkbox" ${this.isTaskCompleted(t) ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
                     <div class="gos-task-info">
                       <span class="gos-task-title">${this._esc(t.title)}</span>
                     </div>
@@ -6593,8 +7967,8 @@ class GeloGrowthOS {
           ` : `
             <ul class="gos-task-list">
               ${tasks.map(t => `
-                <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}">
-                  <input type="checkbox" class="gos-task-checkbox" ${t.status === 'Completed' ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
+                <li class="gos-task-item ${this.isTaskCompleted(t) ? 'completed' : ''}">
+                  <input type="checkbox" class="gos-task-checkbox" ${this.isTaskCompleted(t) ? 'checked' : ''} onchange="app.toggleTaskStatus('${t.taskId}')">
                   <div class="gos-task-info">
                     <span class="gos-task-title">${this._esc(t.title)}</span>
                   </div>
@@ -6787,7 +8161,7 @@ class GeloGrowthOS {
   // ── Reports & Automations ──────────────────────────────────
   renderReports(container) {
     const tasks = this.data.tasks || [];
-    const completedTasks = tasks.filter(t => t.status === 'Completed').length;
+    const completedTasks = tasks.filter(t => this.isTaskCompleted(t)).length;
     const leads = this.data.linkedinLeads || [];
     const clients = this.data.clients || [];
 
@@ -6857,7 +8231,7 @@ class GeloGrowthOS {
         <div class="gos-panel-section-title">Project Tasks (${projectTasks.length})</div>
         <ul class="gos-task-list">
           ${projectTasks.map(t => `
-            <li class="gos-task-item ${t.status === 'Completed' ? 'completed' : ''}" style="padding: 6px 0">
+            <li class="gos-task-item ${this.isTaskCompleted(t) ? 'completed' : ''}" style="padding: 6px 0">
               <span style="font-size:12px; font-weight:600">${this._esc(t.title)}</span>
               ${this.renderBadge(t.status)}
             </li>
@@ -7045,6 +8419,509 @@ class GeloGrowthOS {
         .then(() => sheetsService.appendRecord('projects', newProject))
         .catch(err => console.error('Failed to write client/project to sheets:', err));
     }
+  }
+
+  // ── Router and Landing Page ──────────────────────────────────
+  handleRouting() {
+    const path = window.location.pathname;
+    const searchParams = new URLSearchParams(window.location.search);
+    const redirectParam = searchParams.get('redirect');
+    
+    if (redirectParam) {
+      window.history.replaceState(null, '', redirectParam);
+      this.handleRouting();
+      return;
+    }
+
+    const isLoggedIn = !!localStorage.getItem('gos_google_user');
+    const publicShell = document.getElementById('public-homepage-shell');
+    const internalShell = document.getElementById('internal-dashboard-shell');
+
+    if (path === '/' || path === '/index.html' || path === '') {
+      this.currentView = 'landing';
+      this.currentModule = 'landing';
+      
+      if (publicShell) publicShell.style.display = 'block';
+      if (internalShell) internalShell.style.display = 'none';
+
+      document.body.classList.add('landing-mode');
+      const appEl = document.getElementById('app');
+      if (appEl) appEl.classList.add('landing-mode');
+    } else if (path.startsWith('/app')) {
+      if (!isLoggedIn) {
+        sessionStorage.setItem('gos_auth_redirect', path);
+        window.history.replaceState(null, '', '/');
+        this.currentView = 'landing';
+        this.currentModule = 'landing';
+        
+        if (publicShell) publicShell.style.display = 'block';
+        if (internalShell) internalShell.style.display = 'none';
+
+        document.body.classList.add('landing-mode');
+        const appEl = document.getElementById('app');
+        if (appEl) appEl.classList.add('landing-mode');
+      } else {
+        if (publicShell) publicShell.style.display = 'none';
+        if (internalShell) internalShell.style.display = 'flex';
+
+        document.body.classList.remove('landing-mode');
+        const appEl = document.getElementById('app');
+        if (appEl) appEl.classList.remove('landing-mode');
+        
+        if (path === '/app' || path === '/app/') {
+          this.navigateTo('today');
+        } else if (path.startsWith('/app/tasks')) {
+          this.navigateTo('tasks');
+        } else if (path.startsWith('/app/projects')) {
+          this.navigateTo('projects');
+        } else if (path.startsWith('/app/crm')) {
+          this.navigateTo('leads');
+        } else if (path.startsWith('/app/content')) {
+          this.navigateTo('content');
+        } else if (path.startsWith('/app/operations')) {
+          this.navigateTo('operations');
+        } else if (path.startsWith('/app/goals')) {
+          this.navigateTo('goals');
+        } else {
+          this.navigateTo('today');
+        }
+      }
+    } else {
+      this.currentView = 'landing';
+      this.currentModule = 'landing';
+      
+      if (publicShell) publicShell.style.display = 'block';
+      if (internalShell) internalShell.style.display = 'none';
+
+      document.body.classList.add('landing-mode');
+      const appEl = document.getElementById('app');
+      if (appEl) appEl.classList.add('landing-mode');
+    }
+    
+    this.render();
+  }
+
+  landingSignIn() {
+    const mockUser = { displayName: 'Gelo Vencio', email: 'gelo@prime.co', avatarInitials: 'GV' };
+    localStorage.setItem('gos_google_user', JSON.stringify(mockUser));
+    this.showToast('✅ Signed in with Google', 'success');
+    
+    // Auto-advance connection flow steps on sign-in
+    localStorage.setItem('gos_workspace_connected', 'true');
+    this.landingSyncData();
+  }
+
+  landingSignOut() {
+    localStorage.removeItem('gos_google_user');
+    localStorage.removeItem('gos_workspace_connected');
+    localStorage.removeItem('gos_sheets_connected');
+    this.sheetsConnected = false;
+    this.landingSyncState = 'idle';
+    this.landingSyncError = null;
+    this.showToast('ℹ️ Signed out', 'info');
+    window.history.pushState(null, '', '/');
+    this.handleRouting();
+  }
+
+  toggleLandingDropdown() {
+    const dropdown = document.getElementById('landing-account-dropdown');
+    if (dropdown) {
+      dropdown.classList.toggle('show');
+    }
+  }
+
+  landingConnectWorkspace() {
+    localStorage.setItem('gos_workspace_connected', 'true');
+    this.showToast('📁 Workspace Connected', 'success');
+    this.render();
+  }
+
+  async landingSyncData() {
+    this.landingSyncState = 'syncing';
+    this.landingSyncError = null;
+    this.render();
+    
+    if (!sheetsService.isConfigured()) {
+      this.landingSyncState = 'ready';
+      this.render();
+      return;
+    }
+    
+    try {
+      const alive = await sheetsService.ping();
+      if (!alive) {
+        throw new Error('Could not reach Google Sheets API. Please check if your Google Sheets Web App URL is correct and active.');
+      }
+      
+      sheetsService.signIn();
+      const sheetsData = await sheetsService.readAllData();
+      
+      const local = (() => {
+        try {
+          const raw = localStorage.getItem('gos_local_database');
+          return raw ? JSON.parse(raw) : {};
+        } catch(e) { return {}; }
+      })();
+
+      const mergeTab = (key, sheetsRows) => {
+        if (sheetsRows && sheetsRows.length > 0) {
+          return this.mergeLocalPendingRecords(key, sheetsRows);
+        }
+        return local[key] || [];
+      };
+
+      this.data = {
+        contacts:        mergeTab('contacts',        sheetsData.contacts || []),
+        organizations:   mergeTab('organizations',   sheetsData.organizations || []),
+        linkedinLeads:   mergeTab('linkedinLeads',   sheetsData.linkedinLeads || []),
+        primePipeline:   mergeTab('primePipeline',   sheetsData.primePipeline || []),
+        sccContent:      mergeTab('sccContent',      sheetsData.sccContent || []),
+        calmeraOrders:   mergeTab('calmeraOrders',   sheetsData.calmeraOrders || []),
+        sourceAssets:    mergeTab('sourceAssets',    sheetsData.sourceAssets || []),
+        repurposeOutputs:mergeTab('repurposeOutputs',sheetsData.repurposeOutputs || []),
+        interactions:    mergeTab('interactions',    sheetsData.interactions || []),
+        tasks:           mergeTab('tasks',           sheetsData.tasks || []),
+        projects:        mergeTab('projects',        sheetsData.projects || []),
+        clients:         mergeTab('clients',         sheetsData.clients || []),
+        areas:           mergeTab('areas',           sheetsData.areas || []),
+        goals:           mergeTab('goals',           sheetsData.goals || []),
+        habits:          mergeTab('habits',          sheetsData.habits || []),
+        learning:        mergeTab('learning',        sheetsData.learning || []),
+        notes:           mergeTab('notes',           sheetsData.notes || []),
+        sops:            mergeTab('sops',            sheetsData.sops || []),
+      };
+
+      this.sheetsConnected = true;
+      localStorage.setItem('gos_sheets_connected', 'true');
+      this.applyFilters();
+      this.updateConnectionUI('connected');
+      this.updateNavBadge();
+      
+      this.landingSyncState = 'ready';
+      this.render();
+      this.showToast('✅ Sync Completed!', 'success');
+    } catch (err) {
+      console.error('Landing page sync error:', err);
+      this.landingSyncState = 'failed';
+      this.landingSyncError = err.message || 'Unknown error during Google Sheets sync.';
+      
+      this.loadLocalDataFallback();
+      this.render();
+      this.showToast('⚠️ Sync failed, but you can still enter in local mode.', 'warning');
+    }
+  }
+
+  handlePrimaryLandingAction() {
+    const isLoggedIn = !!localStorage.getItem('gos_google_user');
+    const workspaceConnected = localStorage.getItem('gos_workspace_connected') === 'true';
+    
+    if (!isLoggedIn) {
+      this.landingSignIn();
+    } else if (!workspaceConnected) {
+      this.landingConnectWorkspace();
+    } else if (this.landingSyncState === 'ready' || this.landingSyncState === 'failed') {
+      const redirect = sessionStorage.getItem('gos_auth_redirect') || '/app';
+      sessionStorage.removeItem('gos_auth_redirect');
+      window.history.pushState(null, '', redirect);
+      this.handleRouting();
+    }
+  }
+
+  renderLandingPage(container) {
+    const googleUser = (() => {
+      try {
+        const raw = localStorage.getItem('gos_google_user');
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) { return null; }
+    })();
+    const workspaceConnected = localStorage.getItem('gos_workspace_connected') === 'true';
+    
+    const step1Completed = !!googleUser;
+    const step2Completed = step1Completed && workspaceConnected;
+    const step3Completed = step2Completed && this.landingSyncState === 'ready';
+    const step3Failed = step2Completed && this.landingSyncState === 'failed';
+    const step3Syncing = step2Completed && this.landingSyncState === 'syncing';
+
+    const googleIcon = `<svg viewBox="0 0 24 24" width="16" height="16" style="display:inline-block; vertical-align:middle; margin-right:4px;"><path fill="#EA4335" d="M5.266 9.765A7.077 7.077 0 0 1 12 4.909c1.69 0 3.218.6 4.418 1.582L19.91 3C17.782 1.145 15.055 0 12 0 7.27 0 3.218 2.709 1.255 6.645l4.01 3.12z"/><path fill="#4285F4" d="M23.71 12.273c0-.818-.073-1.609-.209-2.373H12v4.5h6.582A5.63 5.63 0 0 1 16.15 18.12l3.873 3c2.264-2.09 3.682-5.173 3.682-8.847z"/><path fill="#FBBC05" d="M5.266 14.235A7.09 7.09 0 0 1 4.909 12c0-.79.136-1.545.357-2.235L1.255 6.645A11.905 11.905 0 0 0 0 12c0 1.92.455 3.736 1.255 5.355l4.01-3.12z"/><path fill="#34A853" d="M12 24c3.245 0 5.973-1.073 7.964-2.927l-3.873-3c-1.073.718-2.445 1.145-4.09 1.145-3.155 0-5.827-2.136-6.782-5.018L1.209 17.3A11.936 11.936 0 0 0 12 24z"/></svg>`;
+
+    const step1Icon = step1Completed 
+      ? getIconSvg('checkCircle', 18, 'var(--green)') 
+      : googleIcon;
+    const step2Icon = step2Completed 
+      ? getIconSvg('checkCircle', 18, 'var(--green)') 
+      : getIconSvg('briefcase', 16, step1Completed ? 'var(--accent)' : 'var(--text-muted)');
+    const step3Icon = step3Completed 
+      ? getIconSvg('checkCircle', 18, 'var(--green)') 
+      : (step3Failed ? getIconSvg('alert', 16, 'var(--red)') : getIconSvg('zap', 16, step2Completed ? 'var(--accent)' : 'var(--text-muted)'));
+
+    const step1Class = step1Completed ? 'stepper-step completed' : 'stepper-step active';
+    const step2Class = step2Completed ? 'stepper-step completed' : (step1Completed ? 'stepper-step active' : 'stepper-step');
+    const step3Class = step3Completed ? 'stepper-step completed' : (step3Failed ? 'stepper-step failed' : (step2Completed ? 'stepper-step active' : 'stepper-step'));
+
+    const line1Class = step2Completed ? 'stepper-line completed' : (step1Completed ? 'stepper-line active' : 'stepper-line');
+    const line2Class = step3Completed ? 'stepper-line completed' : (step2Completed ? 'stepper-line active' : 'stepper-line');
+    
+    let compactStatusClass = 'connection-status-compact';
+    let compactStatusText = 'Disconnected';
+    if (googleUser) {
+      compactStatusClass += ' google-connected';
+      compactStatusText = 'Google Connected';
+      if (workspaceConnected) {
+        compactStatusClass = 'connection-status-compact workspace-connected';
+        compactStatusText = 'Workspace Connected';
+        if (this.landingSyncState === 'syncing') {
+          compactStatusClass = 'connection-status-compact syncing';
+          compactStatusText = 'Syncing Data...';
+        } else if (this.landingSyncState === 'ready') {
+          compactStatusClass = 'connection-status-compact ready';
+          compactStatusText = 'Sync Ready';
+        } else if (this.landingSyncState === 'failed') {
+          compactStatusClass = 'connection-status-compact failed';
+          compactStatusText = 'Sync Failed';
+        }
+      }
+    }
+
+    let primaryBtnText = 'Continue with Google';
+    let primaryBtnAction = 'app.handlePrimaryLandingAction()';
+    if (googleUser) {
+      if (!workspaceConnected) {
+        primaryBtnText = 'Connect Workspace';
+        primaryBtnAction = 'app.landingConnectWorkspace()';
+      } else if (this.landingSyncState === 'idle' || this.landingSyncState === 'failed') {
+        primaryBtnText = this.landingSyncState === 'failed' ? 'Retry Sync' : 'Sync Data';
+        primaryBtnAction = 'app.landingSyncData()';
+      } else if (this.landingSyncState === 'syncing') {
+        primaryBtnText = 'Syncing Data...';
+        primaryBtnAction = '';
+      } else if (this.landingSyncState === 'ready') {
+        primaryBtnText = 'Enter Growth OS';
+        primaryBtnAction = 'app.handlePrimaryLandingAction()';
+      }
+    }
+    
+    let accountHtml = `
+      <button class="topbar-btn-primary" onclick="app.landingSignIn()" style="font-size: 12px; padding: 8px 16px; cursor: pointer; border-radius: var(--radius);">Continue with Google</button>
+    `;
+    if (googleUser) {
+      accountHtml = `
+        <div class="landing-profile-wrapper" onclick="event.stopPropagation(); app.toggleLandingDropdown()">
+          <div class="landing-avatar">${googleUser.avatarInitials}</div>
+          <div class="landing-profile-info">
+            <div class="landing-profile-name">${googleUser.displayName}</div>
+            <div class="landing-profile-email">${googleUser.email}</div>
+          </div>
+          <span class="landing-profile-chevron">▼</span>
+          <div class="landing-account-dropdown" id="landing-account-dropdown">
+            <div class="dropdown-header">
+              <div class="dropdown-user-name">${googleUser.displayName}</div>
+              <div class="dropdown-user-email">${googleUser.email}</div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <button class="landing-dropdown-item" onclick="app.showToast('Account Settings clicked', 'info')">Account Settings</button>
+            <button class="landing-dropdown-item" onclick="app.showToast('Workspace Settings clicked', 'info')">Workspace Settings</button>
+            <button class="landing-dropdown-item" onclick="app.showToast('Sync Status clicked', 'info')">Sync Status</button>
+            <div class="dropdown-divider"></div>
+            <button class="landing-dropdown-item signout-btn" onclick="app.landingSignOut()">Sign Out</button>
+          </div>
+        </div>
+      `;
+    }
+
+    container.innerHTML = `
+      <div class="landing-container">
+        <header class="landing-header">
+          <div class="landing-logo-block">
+            <div class="logo-icon">G</div>
+            <span class="logo-name">Growth OS</span>
+          </div>
+          <div class="landing-nav" style="display: flex; align-items: center; gap: var(--space-5);">
+            <a href="#" class="landing-nav-link" onclick="event.preventDefault(); document.getElementById('features-section').scrollIntoView({behavior: 'smooth'})">Features</a>
+            <a href="#" class="landing-nav-link" onclick="event.preventDefault(); document.getElementById('connection-card').scrollIntoView({behavior: 'smooth'})">How It Works</a>
+            <div id="landing-account-area" class="landing-account-area">
+              ${accountHtml}
+            </div>
+          </div>
+        </header>
+
+        <section class="landing-hero-section">
+          <div class="landing-grid">
+            <div class="landing-left-col">
+              <h2 class="landing-headline">Run everything from one operating system.</h2>
+              <p class="landing-supporting-text">Manage tasks, projects, leads, content, operations, and goals—all in one connected workspace.</p>
+              
+              <div class="gos-section-card" id="connection-card" style="margin-top: 12px; width: 100%;">
+                <div class="gos-section-card-header">
+                  <span class="gos-section-card-title">🔑 Start where you left off</span>
+                </div>
+                <div class="gos-section-card-body" style="padding: 20px;">
+                  <div class="stepper-container">
+                    <div class="${step1Class}">
+                      <div class="step-circle">${step1Icon}</div>
+                      <div class="step-label">Google Account</div>
+                      <div class="step-status">${step1Completed ? 'Connected' : 'Disconnected'}</div>
+                    </div>
+                    <div class="${line1Class}"></div>
+                    <div class="${step2Class}">
+                      <div class="step-circle">${step2Icon}</div>
+                      <div class="step-label">Connect Workspace</div>
+                      <div class="step-status">${step2Completed ? 'Connected' : (step1Completed ? 'Pending' : 'Locked')}</div>
+                    </div>
+                    <div class="${line2Class}"></div>
+                    <div class="${step3Class}">
+                      <div class="step-circle">${step3Icon}</div>
+                      <div class="step-label">Sync and Enter</div>
+                      <div class="step-status">${step3Completed ? 'Sync Ready' : (step3Failed ? 'Sync Failed' : (step2Completed ? (step3Syncing ? 'Syncing...' : 'Pending') : 'Locked'))}</div>
+                    </div>
+                  </div>
+                  
+                  ${this.landingSyncError ? `
+                    <div class="connection-error-box" style="margin-bottom: 16px;">
+                      <strong>Sync Error:</strong> ${this.landingSyncError}
+                    </div>
+                  ` : ''}
+                  
+                  <div class="${compactStatusClass}" id="connection-status-compact" style="margin-bottom: 20px;">
+                    <span class="status-dot"></span>
+                    <span class="status-text">${compactStatusText}</span>
+                  </div>
+
+                  <div class="connection-actions-area" style="display: flex; flex-direction: column; gap: 10px;">
+                    <button class="topbar-btn-primary" id="btn-primary-action" onclick="${primaryBtnAction}" style="width:100%; justify-content:center; padding:12px; font-weight:600; cursor:pointer;" ${this.landingSyncState === 'syncing' ? 'disabled' : ''}>
+                      ${primaryBtnText}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Column: Dashboard Preview -->
+            <div class="landing-right-col">
+              <div class="preview-browser-frame">
+                <div class="browser-header">
+                  <span class="browser-dot red"></span>
+                  <span class="browser-dot yellow"></span>
+                  <span class="browser-dot green"></span>
+                  <span class="browser-url">growth-os.prime/app</span>
+                </div>
+                <div class="browser-content-mock">
+                  <!-- Simulated dashboard rendering -->
+                  <div class="mock-sidebar">
+                    <div class="mock-logo">G</div>
+                    <div class="mock-nav-item active"></div>
+                    <div class="mock-nav-item"></div>
+                    <div class="mock-nav-item"></div>
+                    <div class="mock-nav-item"></div>
+                    <div class="mock-nav-item"></div>
+                    <div class="mock-nav-item"></div>
+                  </div>
+                  <div class="mock-main">
+                    <div class="mock-topbar">
+                      <div class="mock-title-block">
+                        <div class="mock-title">Growth OS Dashboard</div>
+                        <div class="mock-subtitle">Your unified business workspace</div>
+                      </div>
+                      <div class="mock-avatar">GV</div>
+                    </div>
+                    <div class="mock-content">
+                      <!-- Top Row Widgets -->
+                      <div class="mock-grid-3">
+                        <!-- 1. Tasks Widget -->
+                        <div class="mock-widget">
+                          <div class="mock-widget-header">📝 Tasks</div>
+                          <div class="mock-task-item"><span class="mock-dot-bullet green"></span><span>Design Homepage UI</span></div>
+                          <div class="mock-task-item"><span class="mock-dot-bullet yellow"></span><span>Sheets sync test</span></div>
+                          <div class="mock-task-item completed"><span class="mock-dot-bullet grey"></span><span>Onboard Gelo</span></div>
+                        </div>
+                        <!-- 2. Projects Widget -->
+                        <div class="mock-widget">
+                          <div class="mock-widget-header">📁 Projects</div>
+                          <div class="mock-project-item">
+                            <div class="mock-project-info"><span>Codex CRM</span><span class="mock-percent">35%</span></div>
+                            <div class="mock-project-bar"><div class="mock-project-fill" style="width: 35%;"></div></div>
+                          </div>
+                          <div class="mock-project-item">
+                            <div class="mock-project-info"><span>Plus Size Campaign</span><span class="mock-percent">70%</span></div>
+                            <div class="mock-project-bar"><div class="mock-project-fill" style="width: 70%;"></div></div>
+                          </div>
+                        </div>
+                        <!-- 3. CRM Pipeline Widget -->
+                        <div class="mock-widget">
+                          <div class="mock-widget-header">👤 CRM Pipeline</div>
+                          <div class="mock-crm-item"><span>Leads Active:</span> <strong>12</strong></div>
+                          <div class="mock-crm-item"><span>Proposal:</span> <strong>₱120k</strong></div>
+                          <div class="mock-crm-item"><span>Won:</span> <strong>₱350k</strong></div>
+                        </div>
+                      </div>
+                      <!-- Bottom Row Widgets -->
+                      <div class="mock-grid-3">
+                        <!-- 4. Content Widget -->
+                        <div class="mock-widget">
+                          <div class="mock-widget-header">🚀 Content</div>
+                          <div class="mock-content-item"><span>Mon: Growth OS</span> <span class="mock-badge green">Active</span></div>
+                          <div class="mock-content-item"><span>Wed: Workflows</span> <span class="mock-badge yellow">Draft</span></div>
+                        </div>
+                        <!-- 5. Operations Widget -->
+                        <div class="mock-widget">
+                          <div class="mock-widget-header">⚙️ Operations</div>
+                          <div class="mock-ops-item"><span>Backup Check</span> <span class="mock-check">✔</span></div>
+                          <div class="mock-ops-item"><span>Client Reports</span> <span class="mock-check">✔</span></div>
+                        </div>
+                        <!-- 6. Goals Widget -->
+                        <div class="mock-widget">
+                          <div class="mock-widget-header">🎯 Goals</div>
+                          <div class="mock-goal-item">
+                            <div class="mock-goal-info"><span>Reach $10k MRR</span><span>80%</span></div>
+                            <div class="mock-goal-bar"><div class="mock-goal-fill" style="width: 80%;"></div></div>
+                          </div>
+                          <div class="mock-goal-item">
+                            <div class="mock-goal-info"><span>Publish 12 posts</span><span>50%</span></div>
+                            <div class="mock-goal-bar"><div class="mock-goal-fill" style="width: 50%;"></div></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Feature Cards Summary -->
+        <section class="landing-features-section" id="features-section">
+          <div class="features-grid">
+            <!-- Feature 1 -->
+            <div class="gos-section-card">
+              <div class="gos-section-card-header">
+                <span class="gos-section-card-title">📝 Project Management</span>
+              </div>
+              <div class="gos-section-card-body" style="padding: 16px;">
+                <p class="feature-card-desc">Plan, track, and manage projects, tasks, timelines, and progress.</p>
+              </div>
+            </div>
+            <!-- Feature 2 -->
+            <div class="gos-section-card">
+              <div class="gos-section-card-header">
+                <span class="gos-section-card-title">👤 CRM and Sales</span>
+              </div>
+              <div class="gos-section-card-body" style="padding: 16px;">
+                <p class="feature-card-desc">Manage leads, pipeline stages, calls, follow-ups, and clients.</p>
+              </div>
+            </div>
+            <!-- Feature 3 -->
+            <div class="gos-section-card">
+              <div class="gos-section-card-header">
+                <span class="gos-section-card-title">🚀 Content and Operations</span>
+              </div>
+              <div class="gos-section-card-body" style="padding: 16px;">
+                <p class="feature-card-desc">Manage content schedules, recurring tasks, workflows, and deliverables.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    `;
   }
 }
 

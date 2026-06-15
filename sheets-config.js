@@ -129,7 +129,17 @@ const COLUMN_MAP = {
   note_id: 'noteId', content: 'content',
   
   // Expanded Tasks
-  start_date: 'startDate', area_id: 'areaId', project_id: 'projectId', client_id: 'clientId', content_id: 'contentId', goal_id: 'goalId', estimated_time: 'estimatedTime', actual_time: 'actualTime', is_recurring: 'isRecurring', recurrence_pattern: 'recurrencePattern', subtasks: 'subtasks', attachments: 'attachments', dependencies: 'dependencies', my_day_pinned: 'myDayPinned'
+  start_date: 'startDate', area_id: 'areaId', project_id: 'projectId', client_id: 'clientId', content_id: 'contentId', goal_id: 'goalId', estimated_time: 'estimatedTime', actual_time: 'actualTime', is_recurring: 'isRecurring', recurrence_pattern: 'recurrencePattern', subtasks: 'subtasks', attachments: 'attachments', dependencies: 'dependencies', my_day_pinned: 'myDayPinned',
+  
+  // Revisions extensions
+  due_time: 'dueTime',
+  planned_publish_time: 'plannedPublishTime',
+  call_date: 'callDate',
+  call_time: 'callTime',
+  next_action_time: 'nextActionTime',
+  start_time: 'startTime',
+  deadline_time: 'deadlineTime',
+  lead_id: 'leadId'
 };
 
 // Reverse map (camelCase → snake_case)
@@ -160,6 +170,164 @@ const NUMBER_FIELDS = new Set([
   'orderAmount', 'views', 'comments', 'saves', 'replies', 'engagements', 'leadsGenerated',
   'projectedCloseAmount', 'estimatedTime', 'actualTime', 'accountValue', 'budget', 'progress', 'targetMetric', 'currentMetric', 'streak'
 ]);
+
+// Normalize string to match headers flexibly (converts to lowercase, removes spaces, underscores, hyphens)
+function normalizeColumnName(name) {
+  return String(name || '').toLowerCase().trim().replace(/[\s_-]/g, '');
+}
+
+// Flexible mapping from any sheet header to its corresponding JS camelCase property name
+function mapColumnToJsKey(col) {
+  const normCol = normalizeColumnName(col);
+  
+  const overrides = {
+    // Unique IDs
+    'id': 'id',
+    'taskid': 'taskId',
+    'projectid': 'projectId',
+    'clientid': 'clientId',
+    'leadid': 'leadId',
+    'opportunityid': 'opportunityId',
+    'contentid': 'contentId',
+    'orderid': 'orderId',
+    'reconfirmationid': 'reconfirmationId',
+    'sourceid': 'sourceId',
+    'outputid': 'outputId',
+    'interactionid': 'interactionId',
+    'goalid': 'goalId',
+    'habitid': 'habitId',
+    'learningid': 'learningId',
+    'noteid': 'noteId',
+    'sopid': 'sopId',
+    
+    // Task columns
+    'taskname': 'title',
+    'tasktitle': 'title',
+    'description': 'notes',
+    'notes': 'notes',
+    'status': 'status',
+    'priority': 'priority',
+    'startdate': 'startDate',
+    'starttime': 'startTime',
+    'duedate': 'dueAt',
+    'dueat': 'dueAt',
+    'duetime': 'dueTime',
+    'area': 'areaId',
+    'areaid': 'areaId',
+    'project': 'projectId',
+    'projectid': 'projectId',
+    'client': 'clientId',
+    'clientid': 'clientId',
+    'estimatedtime': 'estimatedTime',
+    'actualtime': 'actualTime',
+    'isrecurring': 'isRecurring',
+    'recurrencepattern': 'recurrencePattern',
+    'mydaypinned': 'myDayPinned',
+    'completedat': 'completedAt',
+    'assignedto': 'assignedTo',
+    
+    // Project columns
+    'projectname': 'projectName',
+    'deadline': 'deadline',
+    'deadlinedate': 'deadline',
+    'deadlinetime': 'deadlineTime',
+    'progress': 'progress',
+    'budget': 'budget',
+    
+    // CRM / Leads columns
+    'leadname': 'contactName',
+    'name': 'contactName',
+    'fullname': 'contactName',
+    'company': 'company',
+    'companybrand': 'company',
+    'stage': 'stage',
+    'calldate': 'callDate',
+    'calltime': 'callTime',
+    'followupdate': 'nextActionDate',
+    'followuptime': 'followUpTime',
+    'nextaction': 'nextAction',
+    'nextactiondate': 'nextActionDate',
+    'nextactiontime': 'nextActionTime',
+    'estimatedvalue': 'estimatedValue',
+    'prob': 'probabilityPercent',
+    'probability': 'probabilityPercent',
+    'probabilitypercent': 'probabilityPercent',
+    'projectedcloseamount': 'projectedCloseAmount',
+    'dealdvalue': 'estimatedValue',
+    'dealstatus': 'dealStatus',
+    'paymentstatus': 'paymentStatus',
+    'pipelinestage': 'pipelineStage',
+    'convertedtopipeline': 'convertedToPipeline',
+    'pipelineopportunityid': 'pipelineOpportunityId',
+    'phonenumber': 'mobile',
+    'emailaddress': 'email',
+    'profileurl': 'linkedinUrl',
+    'score': 'qualificationScore',
+    'leadscore': 'qualificationScore',
+    
+    // Content columns
+    'contenttitle': 'title',
+    'brand': 'brand',
+    'platform': 'channel',
+    'publishdate': 'plannedPublishAt',
+    'publishat': 'plannedPublishAt',
+    'plannedpublishat': 'plannedPublishAt',
+    'publishtime': 'plannedPublishTime',
+    'plannedpublishtime': 'plannedPublishTime',
+    'caption': 'notes',
+    'drafturl': 'draftUrl',
+    'asseturl': 'assetUrl',
+    'publishedurl': 'publishedUrl',
+    'publishedat': 'publishedAt',
+    'contentpillar': 'contentPillar',
+    'audienceneed': 'audienceNeed',
+    'repurposeflag': 'repurposeFlag',
+    
+    // Goals / Habits / Learning
+    'goalname': 'goalName',
+    'targetmetric': 'targetMetric',
+    'currentmetric': 'currentMetric',
+    'habitname': 'habitName',
+    'frequency': 'frequency',
+    'streak': 'streak',
+    'history': 'history',
+    'learningid': 'learningId',
+    'category': 'category',
+    
+    // SOPs / Notes
+    'processtitle': 'processTitle',
+    'steps': 'steps',
+    'version': 'version',
+    'lastupdated': 'lastUpdated',
+    'content': 'content',
+    
+    // Clients
+    'clientname': 'clientName',
+    'services': 'services',
+    'enddate': 'endDate',
+    'accountvalue': 'accountValue',
+    
+    // Timestamps
+    'createddate': 'createdAt',
+    'createdat': 'createdAt',
+    'updateddate': 'updatedAt',
+    'updatedat': 'updatedAt',
+    'occurredat': 'occurredAt',
+    'scheduledat': 'scheduledAt',
+    'resolvedat': 'resolvedAt',
+  };
+
+  if (overrides[normCol]) return overrides[normCol];
+
+  // Fallback to COLUMN_MAP check
+  for (const [snake, camel] of Object.entries(COLUMN_MAP)) {
+    if (normalizeColumnName(snake) === normCol) {
+      return camel;
+    }
+  }
+  
+  return col;
+}
 
 // Dynamic Tab name ↔ JS collection key mapping
 function resolveTabToJsKey(tabName) {
@@ -216,28 +384,33 @@ function resolveTabToJsKey(tabName) {
 
 function resolveJsKeyToTab(jsKey) {
   if (typeof settingsEngine !== 'undefined') {
-    const mappings = settingsEngine.get().sheets.tabMappings;
-    const jsKeyToModId = {
-      contacts: 'contacts',
-      organizations: 'organizations',
-      linkedinLeads: 'leads',
-      primePipeline: 'salesPipeline',
-      sccContent: 'brandCommunity',
-      calmeraOrders: 'productsOrders',
-      repurposeOutputs: 'content',
-      tasks: 'tasks',
-      projects: 'projects',
-      clients: 'clients',
-      goals: 'goals',
-      habits: 'habits',
-      learning: 'learning',
-      notes: 'notes',
-      sops: 'sops',
-    };
-    
-    const modId = jsKeyToModId[jsKey];
-    if (modId && mappings[modId]) {
-      return mappings[modId];
+    try {
+      const mappings = settingsEngine.get().sheets.tabMappings;
+      const jsKeyToModId = {
+        contacts: 'contacts',
+        organizations: 'organizations',
+        linkedinLeads: 'leads',
+        primePipeline: 'salesPipeline',
+        sccContent: 'brandCommunity',
+        calmeraOrders: 'productsOrders',
+        repurposeOutputs: 'content',
+        tasks: 'tasks',
+        projects: 'projects',
+        clients: 'clients',
+        goals: 'goals',
+        habits: 'habits',
+        learning: 'learning',
+        notes: 'notes',
+        sops: 'sops',
+      };
+      
+      const modId = jsKeyToModId[jsKey];
+      // Only use the settings mapping if it resolves to a real non-empty string
+      if (modId && mappings[modId] && typeof mappings[modId] === 'string' && mappings[modId].trim() !== '') {
+        return mappings[modId];
+      }
+    } catch(e) {
+      // settingsEngine threw — fall through to defaults
     }
   }
   
@@ -259,9 +432,123 @@ function resolveJsKeyToTab(jsKey) {
     learning: 'Learning',
     notes: 'Notes',
     sops: 'SOPs',
+    areas: 'Areas',
   };
   
-  return defaultJsToTab[jsKey] || jsKey;
+  return defaultJsToTab[jsKey] || null;
+}
+
+function resolveJsKeyToModuleName(jsKey) {
+  const moduleNames = {
+    contacts: 'Contacts',
+    organizations: 'Organizations',
+    linkedinLeads: 'CRM',
+    primePipeline: 'Prime_Pipeline',
+    sccContent: 'Content',
+    calmeraOrders: 'Calmera_Orders',
+    sourceAssets: 'Source_Assets',
+    repurposeOutputs: 'Repurpose_Outputs',
+    interactions: 'Interactions',
+    tasks: 'Tasks',
+    projects: 'Projects',
+    clients: 'Clients',
+    goals: 'Goals',
+    habits: 'Habits',
+    learning: 'Learning',
+    notes: 'Notes',
+    sops: 'SOPs',
+  };
+
+  return moduleNames[jsKey] || null;
+}
+
+function normalizeSheetValue(val) {
+  if (val === true) return 'TRUE';
+  if (val === false) return 'FALSE';
+  if (Array.isArray(val)) return val.join(', ');
+  return val !== undefined && val !== null ? val : '';
+}
+
+function addFriendlyHeaderValues(jsKey, sheetRow, record) {
+  const pick = (...keys) => {
+    for (const key of keys) {
+      if (record[key] !== undefined && record[key] !== null && record[key] !== '') {
+        return normalizeSheetValue(record[key]);
+      }
+    }
+    return '';
+  };
+
+  const friendlyMaps = {
+    tasks: {
+      'ID': pick('taskId', 'id'),
+      'Task Name': pick('title', 'taskName'),
+      'Description': pick('notes', 'description'),
+      'Status': pick('status'),
+      'Priority': pick('priority'),
+      'Start Date': pick('startDate'),
+      'Start Time': pick('startTime'),
+      'Due Date': pick('dueAt', 'dueDate'),
+      'Due Time': pick('dueTime'),
+      'Area': pick('areaId', 'area'),
+      'Project': pick('projectId', 'project'),
+      'Created Date': pick('createdAt', 'createdDate'),
+      'Updated Date': pick('updatedAt', 'updatedDate'),
+    },
+    projects: {
+      'ID': pick('projectId', 'id'),
+      'Project Name': pick('projectName'),
+      'Status': pick('status'),
+      'Start Date': pick('startDate'),
+      'Start Time': pick('startTime'),
+      'Deadline Date': pick('deadline', 'deadlineDate'),
+      'Deadline Time': pick('deadlineTime'),
+      'Progress': pick('progress'),
+      'Area': pick('areaId', 'area'),
+      'Created Date': pick('createdAt', 'createdDate'),
+      'Updated Date': pick('updatedAt', 'updatedDate'),
+    },
+    linkedinLeads: {
+      'ID': pick('leadId', 'id'),
+      'Lead Name': pick('contactName', 'name', 'fullName'),
+      'Company': pick('company', 'companyBrand', 'organizationName'),
+      'Stage': pick('stage'),
+      'Call Date': pick('callDate'),
+      'Call Time': pick('callTime'),
+      'Follow-Up Date': pick('nextActionDate', 'followUpDate'),
+      'Follow-Up Time': pick('followUpTime', 'nextActionTime'),
+      'Next Action': pick('nextAction'),
+      'Estimated Value': pick('estimatedValue', 'projectedCloseAmount'),
+      'Created Date': pick('createdAt', 'createdDate'),
+      'Updated Date': pick('updatedAt', 'updatedDate'),
+    },
+    clients: {
+      'ID': pick('clientId', 'id'),
+      'Client Name': pick('clientName'),
+      'Company': pick('company'),
+      'Status': pick('status'),
+      'Source Lead ID': pick('sourceLeadId', 'leadId'),
+      'Account Value': pick('accountValue'),
+      'Start Date': pick('startDate'),
+      'Created Date': pick('createdAt', 'createdDate'),
+      'Updated Date': pick('updatedAt', 'updatedDate'),
+    },
+    sccContent: {
+      'ID': pick('contentId', 'id'),
+      'Content Title': pick('title', 'contentTitle'),
+      'Status': pick('status'),
+      'Brand': pick('brand', 'campaign'),
+      'Platform': pick('platform', 'channel'),
+      'Publish Date': pick('plannedPublishAt', 'publishDate'),
+      'Publish Time': pick('plannedPublishTime', 'publishTime'),
+      'Caption': pick('caption', 'notes', 'cta'),
+      'Created Date': pick('createdAt', 'createdDate'),
+      'Updated Date': pick('updatedAt', 'updatedDate'),
+    },
+  };
+
+  Object.assign(sheetRow, friendlyMaps[jsKey] || {});
+  return sheetRow;
 }
 
 
@@ -294,12 +581,30 @@ class SheetsService {
 
   // ── Read All Data ─────────────────────────────────────────
   async readAllData() {
-    const url = `${settingsEngine.getWebAppUrl()}?action=readAll`;
-    const response = await fetch(url);
+    const webAppUrl = settingsEngine.getWebAppUrl();
+    if (!webAppUrl) {
+      throw new Error('Google Sheets Web App URL is not configured.');
+    }
+    let response;
+    try {
+      const url = `${webAppUrl}?action=readAll`;
+      response = await fetch(url);
+    } catch (err) {
+      console.error('Fetch execution error:', err);
+      throw new Error('Network request failed. Please check your network connection and Apps Script URL.');
+    }
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`The server returned HTTP ${response.status}: ${response.statusText || 'Error'}`);
+    }
 
-    const rawData = await response.json();
+    let rawData;
+    try {
+      rawData = await response.json();
+    } catch (err) {
+      throw new Error('The server returned an invalid response format (not valid JSON).');
+    }
+
     if (rawData.error) throw new Error(rawData.error);
 
     // Transform: snake_case → camelCase + parse numbers + denormalize
@@ -311,7 +616,7 @@ class SheetsService {
       data[jsKey] = rows.map((row, index) => {
         const obj = { _rowIndex: index };
         Object.entries(row).forEach(([col, val]) => {
-          const key = COLUMN_MAP[col] || col;
+          const key = mapColumnToJsKey(col);
           // Parse numbers
           if (NUMBER_FIELDS.has(key) && val !== '' && val !== null) {
             obj[key] = parseFloat(val) || 0;
@@ -333,10 +638,49 @@ class SheetsService {
     return data;
   }
 
+  // ── Helper to execute POST actions with descriptive errors ──
+  async sendPostRequest(payload) {
+    const webAppUrl = settingsEngine.getWebAppUrl();
+    if (!webAppUrl) {
+      throw new Error('Google Sheets Web App URL is not configured.');
+    }
+    let response;
+    try {
+      response = await fetch(webAppUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      console.error('Fetch execution error:', err);
+      throw new Error('Network request failed. Please check your network connection and Apps Script URL / CORS configuration.');
+    }
+
+    if (!response.ok) {
+      throw new Error(`The server returned HTTP ${response.status}: ${response.statusText || 'Error'}`);
+    }
+
+    let result;
+    try {
+      result = await response.json();
+    } catch (err) {
+      throw new Error('The server returned an invalid response format (not valid JSON). Check if the script is deployed as a Web App and set to execute as "Me" with access for "Anyone".');
+    }
+
+    if (result && result.success === false) {
+      throw new Error(result.error || 'Operation failed');
+    }
+    if (result && result.error) {
+      throw new Error(result.error);
+    }
+    return result;
+  }
+
   // ── Write Record ──────────────────────────────────────────
   async appendRecord(jsKey, record) {
     const tabName = resolveJsKeyToTab(jsKey);
-    if (!tabName) throw new Error(`Unknown collection: ${jsKey}`);
+    if (!tabName || tabName === 'undefined') throw new Error(`Unknown collection key: "${jsKey}". Check resolveJsKeyToTab mapping.`);
+    const moduleName = resolveJsKeyToModuleName(jsKey) || tabName;
 
     // Convert camelCase → snake_case for the sheet (dual columns support)
     const sheetRow = {};
@@ -358,21 +702,15 @@ class SheetsService {
       }
     });
 
-    const response = await fetch(settingsEngine.getWebAppUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'append', tab: tabName, data: sheetRow }),
-    });
-
-    const result = await response.json();
-    if (result.error) throw new Error(result.error);
-    return result;
+    addFriendlyHeaderValues(jsKey, sheetRow, record);
+    return this.sendPostRequest({ action: 'append', module: moduleName, tab: tabName, record: sheetRow, data: sheetRow });
   }
 
   // ── Update Record ─────────────────────────────────────────
   async updateRecord(jsKey, rowIndex, record) {
     const tabName = resolveJsKeyToTab(jsKey);
-    if (!tabName) throw new Error(`Unknown collection: ${jsKey}`);
+    if (!tabName || tabName === 'undefined') throw new Error(`Unknown collection key: "${jsKey}". Check resolveJsKeyToTab mapping.`);
+    const moduleName = resolveJsKeyToModuleName(jsKey) || tabName;
 
     // Convert camelCase → snake_case for the sheet (dual columns support)
     const sheetRow = {};
@@ -394,46 +732,23 @@ class SheetsService {
       }
     });
 
-    const response = await fetch(settingsEngine.getWebAppUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'update', tab: tabName, data: sheetRow, rowIndex }),
-    });
-
-    const result = await response.json();
-    if (result.error) throw new Error(result.error);
-    return result;
+    addFriendlyHeaderValues(jsKey, sheetRow, record);
+    return this.sendPostRequest({ action: 'update', module: moduleName, tab: tabName, record: sheetRow, data: sheetRow, rowIndex });
   }
 
   // ── Delete Record ─────────────────────────────────────────
   async deleteRecord(jsKey, rowIndex) {
     const tabName = resolveJsKeyToTab(jsKey);
-    if (!tabName) throw new Error(`Unknown collection: ${jsKey}`);
+    if (!tabName || tabName === 'undefined') throw new Error(`Unknown collection key: "${jsKey}". Check resolveJsKeyToTab mapping.`);
+    const moduleName = resolveJsKeyToModuleName(jsKey) || tabName;
 
-    const response = await fetch(settingsEngine.getWebAppUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'delete', tab: tabName, rowIndex }),
-    });
-
-    const result = await response.json();
-    if (result.error) throw new Error(result.error);
-    return result;
+    return this.sendPostRequest({ action: 'delete', module: moduleName, tab: tabName, rowIndex });
   }
 
   // ── Rename Tab in Google Sheets ───────────────────────────
   async renameTab(oldName, newName) {
     if (!this.isConfigured()) return;
-
-    const response = await fetch(settingsEngine.getWebAppUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'renameTab', oldName, newName }),
-    });
-
-    const result = await response.json();
-    if (result.error) throw new Error(result.error);
-    return result;
+    return this.sendPostRequest({ action: 'renameTab', oldName, newName });
   }
 
 
@@ -500,6 +815,13 @@ class SheetsService {
     (data.interactions || []).forEach(int => {
       const contact = contactMap[int.contactId];
       int.contactName = contact?.fullName || int.contactId || '—';
+    });
+
+    // Clients
+    (data.clients || []).forEach(client => {
+      client.leadId = client.leadId || client.sourceLeadId || '';
+      client.sourceLeadId = client.sourceLeadId || client.leadId || '';
+      client.accountValue = parseFloat(client.accountValue) || 0;
     });
   }
 }

@@ -110,14 +110,7 @@ const DEFAULT_SETTINGS = {
     { id: 'automations',       label: 'Automations',         icon: 'zap',            visible: true,  order: 22, category: 'system',    description: 'Recurring automations settings',     sheetTab: '' },
     { id: 'settings',          label: 'Settings',            icon: 'settings-icon',  visible: true,  order: 23, category: 'system',    description: 'Customize your workspace settings', sheetTab: '' },
   ],
-  categories: [
-    { id: 'consulting',     label: 'Consulting',         color: '#6366f1', description: 'Consulting and sales prospects' },
-    { id: 'brandCommunity', label: 'Brand / Community',  color: '#10b981', description: 'Community, apparel, or brand-related work' },
-    { id: 'productsOrders', label: 'Products / Orders',  color: '#3b82f6', description: 'Product leads, orders, and customer follow-ups' },
-    { id: 'content',        label: 'Content',            color: '#f59e0b', description: 'Content and video services' },
-    { id: 'personalBrand',  label: 'Personal Brand',     color: '#ec4899', description: 'Personal brand content and opportunities' },
-    { id: 'referral',       label: 'Referral',           color: '#eab308', description: 'Referral partners and introductions' },
-  ],
+
   sheets: {
     spreadsheetUrl: '',
     webAppUrl: '',
@@ -206,11 +199,9 @@ class SettingsEngine {
             }
           }
         });
-        DEFAULT_SETTINGS.categories.forEach(defCat => {
-          if (!this._cache.categories.find(c => c.id === defCat.id)) {
-            this._cache.categories.push({ ...defCat });
-          }
-        });
+        if (this._cache.categories) {
+          delete this._cache.categories;
+        }
       } else {
         this._cache = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
       }
@@ -264,26 +255,23 @@ class SettingsEngine {
 
   // ── Category Helpers ───────────────────────────────────────
   getAllCategories() {
-    return this.get().categories;
+    return [];
   }
 
   getCategory(id) {
-    return this.get().categories.find(c => c.id === id) || null;
+    return null;
   }
 
   getCategoryLabel(id) {
-    const cat = this.getCategory(id);
-    return cat ? cat.label : id;
+    return id;
   }
 
   getCategoryOptions() {
-    return this.get().categories.map(c =>
-      `<option value="${c.id}">${c.label}</option>`
-    ).join('');
+    return '';
   }
 
   getCategoryLabelsArray() {
-    return this.get().categories.map(c => c.label);
+    return [];
   }
 
   // ── Sheets Helpers ─────────────────────────────────────────

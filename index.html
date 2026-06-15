@@ -8,114 +8,183 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=8">
+  <script>
+    // Apply saved theme immediately before body renders to avoid white/dark flash
+    (function() {
+      try {
+        let theme = 'dark';
+        const rawV3 = localStorage.getItem('gos_settings_v3');
+        if (rawV3) {
+          const parsed = JSON.parse(rawV3);
+          if (parsed && parsed.appearance && parsed.appearance.theme) {
+            theme = parsed.appearance.theme;
+          }
+        } else {
+          const rawV2 = localStorage.getItem('gos_settings_v2');
+          if (rawV2) {
+            const parsed = JSON.parse(rawV2);
+            if (parsed && parsed.appearance && parsed.appearance.theme) {
+              theme = parsed.appearance.theme;
+            }
+          }
+        }
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.classList.add('theme-' + theme);
+      } catch (e) {
+        console.error('Theme init error:', e);
+      }
+    })();
+  </script>
 </head>
 <body>
 
 <div class="gos-app" id="app">
 
-  <!-- ── Sidebar (Desktop) ─────────────────────────────────── -->
-  <aside class="gos-sidebar" id="sidebar">
-    <div class="sidebar-header">
-      <div class="sidebar-logo">
-        <div class="logo-icon">G</div>
-        <span class="logo-name" id="sidebar-app-name">Growth OS</span>
-      </div>
-      <button class="sidebar-close-btn" id="sidebar-close-btn" onclick="app.closeMobileSidebar()" aria-label="Close menu">✕</button>
-      <button class="sidebar-toggle-btn hide-on-mobile" id="btn-sidebar-toggle" onclick="app.toggleSidebar()" title="Collapse sidebar" aria-label="Collapse sidebar"></button>
-    </div>
+  <!-- ── Standalone Homepage Shell ───────────────────────── -->
+  <div id="public-homepage-shell" style="display: none; width: 100%;"></div>
 
-    <div class="sidebar-profile" id="sidebar-profile">
-      <div class="profile-avatar" id="sidebar-avatar">GV</div>
-      <div class="profile-info">
-        <div class="profile-name" id="sidebar-name">Gelo</div>
-        <div class="profile-company" id="sidebar-company">Prime · Founder</div>
-      </div>
-    </div>
+  <!-- ── Internal Dashboard Shell ────────────────────────── -->
+  <div id="internal-dashboard-shell" style="display: flex; width: 100%;">
 
-    <nav class="sidebar-nav" id="sidebar-nav" aria-label="Main navigation">
-      <!-- Dynamically rendered by app.js buildNavigation() -->
+    <!-- ── Sidebar (Desktop) ─────────────────────────────────── -->
+    <aside class="gos-sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <div class="logo-icon">G</div>
+          <span class="logo-name" id="sidebar-app-name">Growth OS</span>
+        </div>
+        <button class="sidebar-close-btn" id="sidebar-close-btn" onclick="app.closeMobileSidebar()" aria-label="Close menu">✕</button>
+        <button class="sidebar-toggle-btn hide-on-mobile" id="btn-sidebar-toggle" onclick="app.toggleSidebar()" title="Collapse sidebar" aria-label="Collapse sidebar"></button>
+      </div>
+
+      <div class="sidebar-profile" id="sidebar-profile">
+        <div class="profile-avatar" id="sidebar-avatar">GV</div>
+        <div class="profile-info">
+          <div class="profile-name" id="sidebar-name">Gelo</div>
+          <div class="profile-company" id="sidebar-company">Prime · Founder</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" id="sidebar-nav" aria-label="Main navigation">
+        <!-- Dynamically rendered by app.js buildNavigation() -->
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-indicator" id="connection-indicator">
+          <span class="conn-dot" id="conn-dot"></span>
+          <span class="conn-label" id="conn-label">Not Connected</span>
+        </div>
+        <div class="sidebar-conn-actions">
+          <button class="btn-sidebar-action" id="btn-connect" onclick="app.connectSheets()">Connect Sheets</button>
+          <button class="btn-sidebar-action" id="btn-disconnect" style="display:none" onclick="app.disconnectSheets()">Disconnect</button>
+          <button class="btn-sidebar-action" id="btn-refresh" style="display:none" onclick="app.refreshFromSheets()">↻ Sync</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ── Sidebar Overlay (Mobile) ──────────────────────────── -->
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="app.closeMobileSidebar()"></div>
+
+    <!-- ── Main Content ──────────────────────────────────────── -->
+    <main class="gos-main" id="gos-main">
+
+      <!-- Topbar -->
+      <header class="gos-topbar" id="gos-topbar">
+        <div class="topbar-left">
+          <button class="topbar-menu-btn" id="topbar-menu-btn" onclick="app.openMobileSidebar()" aria-label="Open menu">
+            <span></span><span></span><span></span>
+          </button>
+          <div class="topbar-title-block">
+            <div style="display:flex; align-items:center;">
+              <h1 class="topbar-title" id="view-title">Today</h1>
+              <span id="topbar-sync-status" style="display:none; font-size:11px; margin-left:12px; padding:3px 8px; border-radius:4px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;"></span>
+            </div>
+            <p class="topbar-subtitle" id="view-subtitle"></p>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div class="topbar-search-wrap" id="topbar-search-wrap">
+            <span class="search-icon"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></svg></span>
+            <input class="topbar-search" id="global-search" type="search" placeholder="Search…" autocomplete="off" oninput="app.handleSearch(this.value)">
+          </div>
+          <div class="topbar-controls">
+            <select class="topbar-filter" id="filter-status" onchange="app.handleFilterStatus(this.value)">
+              <option value="all">All</option>
+            </select>
+            <button class="topbar-icon-btn" id="btn-theme-toggle" onclick="app.toggleTheme()" title="Toggle theme" aria-label="Toggle light/dark mode"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.93 4.93l1.41 1.41"/><path d="M17.66 17.66l1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M6.34 17.66l-1.41 1.41"/><path d="M19.07 4.93l-1.41 1.41"/></svg></button>
+            
+            <!-- Activity & Status Log Toggle -->
+            <div class="notifications-container" style="position:relative">
+              <button class="topbar-icon-btn" id="btn-notifications-toggle" onclick="app.toggleNotifications(event)" title="View activity log" aria-label="View activity log">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                </svg>
+                <span class="notifications-badge" id="notifications-badge" style="display:none"></span>
+              </button>
+              <div class="notifications-dropdown" id="notifications-dropdown">
+                <div class="notifications-dropdown-header">
+                  <span>Activity & Status</span>
+                  <button class="btn-clear-notifications" onclick="app.clearNotifications(event)">Clear</button>
+                </div>
+                <div class="notifications-dropdown-list" id="notifications-dropdown-list">
+                  <div class="notification-empty">No recent activity</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="quick-add-container" style="position:relative">
+              <button class="topbar-btn-primary" id="btn-add-record" onclick="app.toggleQuickAddDropdown(event)">⚡ Quick Add</button>
+              <div class="quick-add-dropdown" id="quick-add-dropdown">
+                <button class="dropdown-item" onclick="app.openQuickAdd('tasks', event)">📝 Add Task</button>
+                <button class="dropdown-item" onclick="app.openQuickAdd('projects', event)">📁 Add Project</button>
+                <button class="dropdown-item" onclick="app.openQuickAdd('linkedin', event)">👤 Add Lead</button>
+                <button class="dropdown-item" onclick="app.openQuickAdd('clients', event)">🤝 Add Client</button>
+                <button class="dropdown-item" onclick="app.openQuickAdd('scc', event)">🚀 Add Content</button>
+                <button class="dropdown-item" onclick="app.openQuickAdd('notes', event)">📄 Add Note</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Page Content Area -->
+      <div class="gos-content" id="main-content">
+        <!-- Rendered dynamically by app.js -->
+        <div class="initial-loading">
+          <div class="loading-spinner"></div>
+          <p>Loading Growth OS…</p>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- ── Mobile Bottom Navigation ──────────────────────────── -->
+    <nav class="mobile-bottom-nav" id="mobile-bottom-nav" aria-label="Mobile navigation">
+      <button class="mobile-nav-btn active" id="mob-nav-today" data-module="today" onclick="app.navigateTo('today')">
+        <span class="mob-nav-icon">🏠</span>
+        <span class="mob-nav-label" id="mob-label-today">Today</span>
+      </button>
+      <button class="mobile-nav-btn" id="mob-nav-calendar" data-module="calendar" onclick="app.navigateTo('calendar')">
+        <span class="mob-nav-icon">📅</span>
+        <span class="mob-nav-label" id="mob-label-calendar">Calendar</span>
+      </button>
+      <button class="mobile-nav-btn" id="mob-nav-leads" data-module="leads" onclick="app.navigateTo('leads')">
+        <span class="mob-nav-icon">👤</span>
+        <span class="mob-nav-label" id="mob-label-leads">Leads</span>
+      </button>
+      <button class="mobile-nav-btn" id="mob-nav-messages" data-module="messages" onclick="app.navigateTo('messages')">
+        <span class="mob-nav-icon">💬</span>
+        <span class="mob-nav-label" id="mob-label-messages">Messages</span>
+      </button>
+      <button class="mobile-nav-btn" id="mob-nav-more" onclick="app.openMoreDrawer()">
+        <span class="mob-nav-icon">⋯</span>
+        <span class="mob-nav-label">More</span>
+      </button>
     </nav>
 
-    <div class="sidebar-footer">
-      <div class="connection-indicator" id="connection-indicator">
-        <span class="conn-dot" id="conn-dot"></span>
-        <span class="conn-label" id="conn-label">Not Connected</span>
-      </div>
-      <div class="sidebar-conn-actions">
-        <button class="btn-sidebar-action" id="btn-connect" onclick="app.connectSheets()">Connect Sheets</button>
-        <button class="btn-sidebar-action" id="btn-disconnect" style="display:none" onclick="app.disconnectSheets()">Disconnect</button>
-        <button class="btn-sidebar-action" id="btn-refresh" style="display:none" onclick="app.refreshFromSheets()">↻ Sync</button>
-      </div>
-    </div>
-  </aside>
-
-  <!-- ── Sidebar Overlay (Mobile) ──────────────────────────── -->
-  <div class="sidebar-overlay" id="sidebar-overlay" onclick="app.closeMobileSidebar()"></div>
-
-  <!-- ── Main Content ──────────────────────────────────────── -->
-  <main class="gos-main" id="gos-main">
-
-    <!-- Topbar -->
-    <header class="gos-topbar" id="gos-topbar">
-      <div class="topbar-left">
-        <button class="topbar-menu-btn" id="topbar-menu-btn" onclick="app.openMobileSidebar()" aria-label="Open menu">
-          <span></span><span></span><span></span>
-        </button>
-        <div class="topbar-title-block">
-          <h1 class="topbar-title" id="view-title">Today</h1>
-          <p class="topbar-subtitle" id="view-subtitle"></p>
-        </div>
-      </div>
-      <div class="topbar-right">
-        <div class="topbar-search-wrap" id="topbar-search-wrap">
-          <span class="search-icon"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></svg></span>
-          <input class="topbar-search" id="global-search" type="search" placeholder="Search…" autocomplete="off" oninput="app.handleSearch(this.value)">
-        </div>
-        <div class="topbar-controls">
-          <select class="topbar-filter" id="filter-status" onchange="app.handleFilterStatus(this.value)">
-            <option value="all">All</option>
-          </select>
-          <button class="topbar-icon-btn" id="btn-theme-toggle" onclick="app.toggleTheme()" title="Toggle theme" aria-label="Toggle light/dark mode"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.93 4.93l1.41 1.41"/><path d="M17.66 17.66l1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M6.34 17.66l-1.41 1.41"/><path d="M19.07 4.93l-1.41 1.41"/></svg></button>
-          <button class="topbar-btn-primary" id="btn-add-record" onclick="app.openAddModal()">+ Add</button>
-        </div>
-      </div>
-    </header>
-
-    <!-- Page Content Area -->
-    <div class="gos-content" id="main-content">
-      <!-- Rendered dynamically by app.js -->
-      <div class="initial-loading">
-        <div class="loading-spinner"></div>
-        <p>Loading Growth OS…</p>
-      </div>
-    </div>
-
-  </main>
-
-  <!-- ── Mobile Bottom Navigation ──────────────────────────── -->
-  <nav class="mobile-bottom-nav" id="mobile-bottom-nav" aria-label="Mobile navigation">
-    <button class="mobile-nav-btn active" id="mob-nav-today" data-module="today" onclick="app.navigateTo('today')">
-      <span class="mob-nav-icon">🏠</span>
-      <span class="mob-nav-label" id="mob-label-today">Today</span>
-    </button>
-    <button class="mobile-nav-btn" id="mob-nav-calendar" data-module="calendar" onclick="app.navigateTo('calendar')">
-      <span class="mob-nav-icon">📅</span>
-      <span class="mob-nav-label" id="mob-label-calendar">Calendar</span>
-    </button>
-    <button class="mobile-nav-btn" id="mob-nav-leads" data-module="leads" onclick="app.navigateTo('leads')">
-      <span class="mob-nav-icon">👤</span>
-      <span class="mob-nav-label" id="mob-label-leads">Leads</span>
-    </button>
-    <button class="mobile-nav-btn" id="mob-nav-messages" data-module="messages" onclick="app.navigateTo('messages')">
-      <span class="mob-nav-icon">💬</span>
-      <span class="mob-nav-label" id="mob-label-messages">Messages</span>
-    </button>
-    <button class="mobile-nav-btn" id="mob-nav-more" onclick="app.openMoreDrawer()">
-      <span class="mob-nav-icon">⋯</span>
-      <span class="mob-nav-label">More</span>
-    </button>
-  </nav>
+  </div> <!-- /#internal-dashboard-shell -->
 
   <!-- ── Mobile More Drawer ─────────────────────────────────── -->
   <div class="drawer-backdrop" id="drawer-backdrop" onclick="app.closeMoreDrawer()"></div>

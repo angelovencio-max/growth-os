@@ -34,15 +34,15 @@ function setupMasterSheet() {
       color: '#3b82f6',
     },
     'LinkedIn_Leads': {
-      headers: ['lead_id', 'name', 'company_brand', 'phone_number', 'email_address', 'source', 'profile_url', 'stage', 'score', 'priority', 'next_action', 'follow_up_date', 'follow_up_time', 'projected_close_amount', 'converted_to_pipeline', 'pipeline_opportunity_id', 'pipeline_stage', 'deal_status', 'payment_status', 'notes', 'created_at', 'updated_at'],
+      headers: ['ID', 'Lead Name', 'Company', 'Stage', 'Call Date', 'Call Time', 'Follow-Up Date', 'Follow-Up Time', 'Next Action', 'Estimated Value', 'Created Date', 'Updated Date'],
       color: '#22d3ee',
     },
     'Prime_Pipeline': {
-      headers: ['opportunity_id', 'contact_id', 'organization_id', 'source_lead_id', 'service_interest', 'problem_statement', 'stage', 'estimated_value', 'probability_percent', 'weighted_value', 'budget_range', 'decision_maker', 'timeline', 'discovery_date', 'proposal_date', 'next_action', 'next_action_date', 'close_date', 'outcome_reason', 'owner_id'],
+      headers: ['opportunity_id', 'contact_id', 'organization_id', 'source_lead_id', 'service_interest', 'problem_statement', 'stage', 'estimated_value', 'probability_percent', 'weighted_value', 'budget_range', 'decision_maker', 'timeline', 'discovery_date', 'proposal_date', 'next_action', 'next_action_date', 'next_action_time', 'close_date', 'outcome_reason', 'owner_id'],
       color: '#f59e0b',
     },
     'SCC_Content': {
-      headers: ['content_id', 'title', 'content_pillar', 'audience_need', 'format', 'channel', 'campaign', 'CTA', 'status', 'planned_publish_at', 'draft_url', 'asset_url', 'published_url', 'published_at', 'views', 'comments', 'saves', 'replies', 'repurpose_flag', 'source_id', 'owner_id'],
+      headers: ['ID', 'Content Title', 'Status', 'Brand', 'Platform', 'Publish Date', 'Publish Time', 'Caption', 'Created Date', 'Updated Date'],
       color: '#10b981',
     },
     'Calmera_Orders': {
@@ -66,15 +66,15 @@ function setupMasterSheet() {
       color: '#64748b',
     },
     'Tasks': {
-      headers: ['task_id', 'record_type', 'record_id', 'task_type', 'title', 'priority', 'start_date', 'due_at', 'completed_at', 'assigned_to', 'status', 'area_id', 'project_id', 'client_id', 'content_id', 'goal_id', 'estimated_time', 'actual_time', 'is_recurring', 'recurrence_pattern', 'subtasks', 'attachments', 'dependencies', 'my_day_pinned', 'created_at', 'notes'],
+      headers: ['ID', 'Task Name', 'Description', 'Status', 'Priority', 'Start Date', 'Start Time', 'Due Date', 'Due Time', 'Area', 'Project', 'Created Date', 'Updated Date'],
       color: '#64748b',
     },
     'Projects': {
-      headers: ['project_id', 'project_name', 'deadline', 'progress', 'budget', 'notes', 'created_at'],
+      headers: ['ID', 'Project Name', 'Status', 'Start Date', 'Start Time', 'Deadline Date', 'Deadline Time', 'Progress', 'Area', 'Created Date', 'Updated Date'],
       color: '#8b5cf6',
     },
     'Clients': {
-      headers: ['client_id', 'client_name', 'services', 'end_date', 'account_value', 'notes', 'created_at'],
+      headers: ['ID', 'Client Name', 'Company', 'Status', 'Source Lead ID', 'Account Value', 'Start Date', 'Created Date', 'Updated Date'],
       color: '#8b5cf6',
     },
     'Areas': {
@@ -199,28 +199,15 @@ function setupValidations(ss) {
   // Priority (used in multiple sheets)
   const priorities = ['Critical', 'High', 'Normal', 'Low'];
   
-  // ── Contacts
-  setDropdown('Contacts', 'G', ['LinkedIn Lead', 'Prime', 'SCC', 'Calmera', 'Partner']);
-  setDropdown('Contacts', 'H', ['Email', 'LinkedIn', 'SMS', 'Phone', 'WhatsApp']);
-  setDropdown('Contacts', 'K', ['Active', 'Inactive', 'Archived']);
-  
-  // ── Organizations
-  setDropdown('Organizations', 'F', ['Active', 'Prospect', 'Partner', 'Inactive', 'Archived']);
-  
   // ── LinkedIn_Leads
-  setDropdown('LinkedIn_Leads', 'F', ['Pending', 'Connected', 'Following', 'Not Connected']);
-  setDropdown('LinkedIn_Leads', 'K', priorities);
-  setDropdown('LinkedIn_Leads', 'L', ['New', 'Qualified', 'Contacted', 'Nurturing', 'Converted', 'Recycle', 'Closed']);
+  setDropdown('LinkedIn_Leads', 'D', ['New', 'Qualified', 'Contacted', 'Nurturing', 'Closed', 'Recycle']);
   
   // ── Prime_Pipeline
-  setDropdown('Prime_Pipeline', 'G', ['New Inquiry', 'Qualified', 'Discovery', 'Proposal Sent', 'Negotiation', 'Won', 'Lost', 'Handoff']);
+  setDropdown('Prime_Pipeline', 'G', ['New Inquiry', 'Qualified', 'Discovery', 'Proposal Sent', 'Negotiation', 'Won', 'Lost', 'Handoff', 'Closed']);
   
   // ── SCC_Content
-  setDropdown('SCC_Content', 'C', ['Mindset & Habits', 'Mental Health', 'Physical Wellness', 'Productivity', 'Community']);
-  setDropdown('SCC_Content', 'E', ['Carousel Post', 'Short Video', 'Blog Article', 'Live Session', 'Story Series', 'Interview Post', 'Quote Graphic', 'Thread']);
-  setDropdown('SCC_Content', 'F', ['Instagram', 'TikTok / Reels', 'LinkedIn', 'Facebook Group', 'Website', 'YouTube', 'Twitter/X']);
-  setDropdown('SCC_Content', 'I', ['Idea', 'Planned', 'Draft', 'Review', 'Scheduled', 'Published', 'Archived']);
-  setDropdown('SCC_Content', 'S', ['TRUE', 'FALSE']);
+  setDropdown('SCC_Content', 'C', ['Idea', 'Planned', 'Draft', 'Review', 'Scheduled', 'Published', 'Archived']);
+  setDropdown('SCC_Content', 'E', ['Instagram', 'TikTok / Reels', 'LinkedIn', 'Facebook Group', 'Website', 'YouTube', 'Twitter/X']);
   
   // ── Calmera_Orders
   setDropdown('Calmera_Orders', 'I', ['Email', 'SMS', 'Phone', 'WhatsApp']);
@@ -228,25 +215,24 @@ function setupValidations(ss) {
   setDropdown('Calmera_Orders', 'M', ['New', 'Pending', 'Updated', 'Fulfillment Ready', 'At Risk', 'Closed', 'Cancelled']);
   
   // ── Reconfirmations
-  setDropdown('Reconfirmations', 'H', ['Confirmed', 'Changed', 'Cancelled', 'No Response', 'Partial']);
+  setDropdown('Reconfirmations', 'D', ['Email', 'SMS', 'Phone', 'WhatsApp']);
+  setDropdown('Reconfirmations', 'H', ['Sent', 'Delivered', 'Read', 'Replied', 'Failed']);
+  setDropdown('Reconfirmations', 'K', ['TRUE', 'FALSE']);
   
   // ── Source_Assets
-  setDropdown('Source_Assets', 'B', ['Long Post', 'Blog Article', 'Live Session Recording', 'Client Insight', 'Podcast Episode', 'Video', 'Thread', 'Case Study']);
-  setDropdown('Source_Assets', 'I', ['TRUE', 'FALSE']);
-  setDropdown('Source_Assets', 'K', ['Available', 'Pending Approval', 'In Use', 'Exhausted', 'Archived']);
+  setDropdown('Source_Assets', 'B', ['Video', 'Article', 'Book', 'Podcast', 'Social Post', 'Other']);
+  setDropdown('Source_Assets', 'K', ['Draft', 'Review', 'Ready', 'Archived']);
   
   // ── Repurpose_Outputs
-  setDropdown('Repurpose_Outputs', 'I', ['Available', 'Queued', 'Draft', 'Review', 'Scheduled', 'Published', 'Evaluated', 'Archived']);
-  
-  // ── Interactions
-  setDropdown('Interactions', 'E', ['LinkedIn', 'Email', 'Phone', 'Video Call', 'In Person', 'SMS', 'WhatsApp', 'Social Media']);
-  setDropdown('Interactions', 'F', ['Inbound', 'Outbound', 'Both']);
-  setDropdown('Interactions', 'G', ['Message', 'Comment', 'Call', 'Meeting', 'Proposal', 'Reconfirmation', 'Content', 'Follow-Up']);
+  setDropdown('Repurpose_Outputs', 'I', ['Idea', 'Writing', 'Production', 'Editing', 'Scheduled', 'Published', 'Archived']);
   
   // ── Tasks
-  setDropdown('Tasks', 'F', priorities);
-  setDropdown('Tasks', 'I', ['Open', 'In Progress', 'Waiting', 'Completed', 'Cancelled']);
-  setDropdown('Tasks', 'K', ['Manual', 'Automation', 'Imported']);
+  setDropdown('Tasks', 'D', ['To Do', 'In Progress', 'Waiting', 'Completed', 'Cancelled']);
+  setDropdown('Tasks', 'E', priorities);
+
+  // ── Projects / Clients
+  setDropdown('Projects', 'C', ['Planning', 'In Progress', 'Waiting', 'Completed', 'Cancelled']);
+  setDropdown('Clients', 'D', ['Active', 'Onboarding', 'Paused', 'Closed']);
   
   Logger.log('✅ Data validations set');
 }
@@ -269,9 +255,8 @@ function populateConfigLists(ss) {
     ['lead_stage', 'Qualified', 2, 'TRUE', '', '', '', '', ''],
     ['lead_stage', 'Contacted', 3, 'TRUE', '', '', '', '', ''],
     ['lead_stage', 'Nurturing', 4, 'TRUE', '', '', '', '', ''],
-    ['lead_stage', 'Converted', 5, 'TRUE', '', '', '', '', ''],
+    ['lead_stage', 'Closed', 5, 'TRUE', '', '', '', '', ''],
     ['lead_stage', 'Recycle', 6, 'TRUE', '', '', '', '', ''],
-    ['lead_stage', 'Closed', 7, 'TRUE', '', '', '', '', ''],
     
     // Prime stages
     ['prime_stage', 'New Inquiry', 1, 'TRUE', '', '', '', '', ''],
@@ -282,6 +267,7 @@ function populateConfigLists(ss) {
     ['prime_stage', 'Won', 6, 'TRUE', '', '', '', '', ''],
     ['prime_stage', 'Lost', 7, 'TRUE', '', '', '', '', ''],
     ['prime_stage', 'Handoff', 8, 'TRUE', '', '', '', '', ''],
+    ['prime_stage', 'Closed', 9, 'TRUE', '', '', '', '', ''],
     
     // Content status
     ['content_status', 'Idea', 1, 'TRUE', '', '', '', '', ''],
@@ -345,9 +331,9 @@ function setupDashboard(ss) {
   const metrics = [
     // [Metric, Formula, Target, Status Formula]
     ['Total LinkedIn Leads', '=COUNTA(LinkedIn_Leads!A2:A)', '', ''],
-    ['Active Leads (not Closed/Converted)', '=COUNTIFS(LinkedIn_Leads!L2:L,"<>Closed",LinkedIn_Leads!L2:L,"<>Converted",LinkedIn_Leads!L2:L,"<>")', '', ''],
-    ['Leads Missing Next Action', '=COUNTIFS(LinkedIn_Leads!L2:L,"<>Closed",LinkedIn_Leads!L2:L,"<>Converted",LinkedIn_Leads!O2:O,"")', '0', '=IF(B4=0,"✅","⚠️")'],
-    ['Converted Leads', '=COUNTIF(LinkedIn_Leads!L2:L,"Converted")', '', ''],
+    ['Active Leads (not Closed)', '=COUNTIFS(LinkedIn_Leads!H2:H,"<>Closed",LinkedIn_Leads!H2:H,"<>")', '', ''],
+    ['Leads Missing Next Action', '=COUNTIFS(LinkedIn_Leads!H2:H,"<>Closed",LinkedIn_Leads!L2:L,"")', '0', '=IF(B4=0,"✅","⚠️")'],
+    ['Closed Leads', '=COUNTIF(LinkedIn_Leads!H2:H,"Closed")', '', ''],
     ['Conversion Rate', '=IF(B2>0,B5/B2,0)', '>=25%', ''],
     ['', '', '', ''],
     ['Total Pipeline Opportunities', '=COUNTA(Prime_Pipeline!A2:A)', '', ''],
